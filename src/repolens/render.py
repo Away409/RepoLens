@@ -1,0 +1,161 @@
+"""Chinese Markdown reports with source links and bounded presentation."""
+
+import html
+import re
+from urllib.parse import quote
+
+from .models import Report
+
+
+def clean(value: object) -> str:
+    text = re.sub(r"[\x00-\x1f\x7f]", " ", str(value))
+    text = html.escape(text, quote=False)
+    for char in ("\\", "`", "*", "_", "[", "]", "|", "#"):
+        text = text.replace(char, "\\" + char)
+    return text
+
+
+def source(report: Report, path: str, line: int | None = None) -> str:
+    label = clean(path + (f":{line}" if line else ""))
+    if report.url and report.revision:
+        url = f"{report.url}/blob/{report.revision}/{quote(path, safe='/')}"
+        if line:
+            url += f"#L{line}"
+        return f"[{label}]({url})"
+    return label
+
+
+def markdown(report: Report) -> str:
+    description = (
+        clean(report.description) if report.description else "未提供；请结合 README 判断用途。"
+    )
+    out = [
+        f"# RepoLens · {clean(report.name)}",
+        "",
+        "> 基于文件清单、配置和 Python AST 的静态分析；不执行目标代码，不调用大模型。",
+        "",
+        "## 项目概览",
+        "",
+        f"- 来源：{report.source}",
+        f"- 描述：{description}",
+        f"- 提交：{report.revision or '本地工作目录（无提交固定）'}",
+        f"- 生成时间（UTC）：{report.generated_at}",
+        f"- 许可证元数据：{clean(report.license or '未提供；请阅读 LICENSE 原文')}",
+        "",
+        "## 分析范围",
+        "",
+        "| 指标 | 结果 |",
+        "| --- | --- |",
+        f"| 纳入清单的文件 | {report.file_count} |",
+        f"| 内容候选（Python / 支持的配置 / README） | {report.eligible_files} |",
+        f"| 实际读取文本 | {len(report.analyzed_files)} |",
+        f"| 读取字节 | {report.bytes_read} |",
+        f"| API 请求次数（含重试） | {report.requests} |",
+        f"| 清单状态 | {'完整（应用排除规则后）' if report.inventory_complete else '不完整'} |",
+        "",
+        "语言统计按清单中的扩展名计文件数，不代表代码行数或 GitHub Linguist 结果。",
+        "",
+        "## 技术栈线索",
+        "",
+        "| 语言 | 文件数 |",
+        "| --- | ---: |",
+    ]
+    out.extend(f"| {clean(k)} | {v} |" for k, v in report.languages.items())
+    if not report.languages:
+        out.append("| 未识别 | 0 |")
+    if report.readme_excerpt:
+        excerpt = report.readme_excerpt
+        out += [
+            "",
+            "## README 开头摘录",
+            "",
+            f"来源：{source(report, excerpt.path, excerpt.line)}"
+            "（最多 16 行 / 1200 字符；非自动总结）",
+            "",
+        ]
+        out.extend(f"> {clean(line)}".rstrip() for line in excerpt.detail.splitlines())
+    out += ["", "## 工程结构检查", "", "检测到文件只说明它存在；不会声称测试通过或配置有效。", ""]
+    for key, paths in report.signals.items():
+        if paths:
+            detail = "、".join(source(report, p) for p in paths[:5])
+            if len(paths) > 5:
+                detail += f" 等 {len(paths)} 个"
+        else:
+            detail = "在已扫描范围内未发现"
+        out.append(f"- **{key}**：{detail}")
+    out += ["", "## 文件目录（最多 120 项）", ""]
+    out.extend(f"- {source(report, p)}" for p in report.files[:120])
+    if len(report.files) > 120:
+        out.append(f"- …另有 {len(report.files) - 120} 项；完整清单见 JSON。")
+    out += [
+        "",
+        "## 声明依赖",
+        "",
+        "仅解析已读取的清单，不解析传递依赖或锁文件，不验证版本能否安装。",
+        "",
+        "| 名称 | 声明 | 分组 | 来源 |",
+        "| --- | --- | --- | --- |",
+    ]
+    for dep in report.dependencies[:150]:
+        out.append(
+            f"| {clean(dep.name)} | {clean(dep.specification)} | {clean(dep.group)} | "
+            f"{source(report, dep.path)} |"
+        )
+    if not report.dependencies:
+        out.append("| 未提取到 | — | — | — |")
+    if len(report.dependencies) > 150:
+        out.append("\n更多声明见 JSON。")
+    out += ["", "## 入口证据", ""]
+    for item in report.entry_points[:80]:
+        out.append(f"- {source(report, item.path, item.line)}：{clean(item.detail)}")
+    if not report.entry_points:
+        out.append("未发现可识别的入口声明；库项目也可能没有独立可执行入口。")
+    out += ["", "## Python 模块与符号", "", "方法与嵌套函数使用限定名称。", ""]
+    for module in report.modules:
+        out += [f"### {clean(module.path)}", "", f"源码：{source(report, module.path)}", ""]
+        for symbol in module.symbols[:40]:
+            out.append(
+                f"- {clean(symbol.kind)} **{clean(symbol.name)}** — "
+                f"{source(report, module.path, symbol.line)}"
+            )
+        if len(module.symbols) > 40:
+            out.append("- 更多符号见 JSON。")
+        if not module.symbols:
+            out.append("- 未定义类或函数。")
+        out.append("")
+    if not report.modules:
+        out.append("本次未成功解析 Python 模块。\n")
+    out += [
+        "## 模块导入关系",
+        "",
+        "依据静态 import 语句匹配常见根目录 / src 布局；"
+        "不是运行时调用图。条件导入、类型检查导入也会计入；动态导入和自定义搜索路径不解析。",
+        "",
+        "| 来源 | 导入目标 |",
+        "| --- | --- |",
+    ]
+    for edge in report.import_edges[:100]:
+        out.append(f"| {source(report, edge.source, edge.line)} | {source(report, edge.target)} |")
+    if not report.import_edges:
+        out.append("| 未解析到仓库内模块连接 | — |")
+    out += [
+        "",
+        "调用表达式及其行号保存在 JSON 的 modules[].calls；未做动态绑定或调用目标解析。",
+        "",
+        "## 建议阅读顺序",
+        "",
+        "1. 阅读 README，明确项目用途和运行前提。",
+        "2. 阅读依赖清单和已识别的入口声明。",
+        "3. 从入口所在模块沿导入关系阅读实现，再结合测试核对行为。",
+        "4. 亲自运行可信项目的测试；本报告没有执行目标仓库代码。",
+        "",
+        "## 限制与告警",
+        "",
+        "- 第一版深入解析 Python；其他语言主要提供文件统计、配置和工程结构线索。",
+        "- 根 .gitignore 仅在本地模式生效；嵌套 .gitignore 不解析。",
+        "- 固定排除依赖、构建产物、符号链接、子模块和常见密钥文件；不构成全面敏感信息扫描。",
+        "- Markdown 为阅读摘要，部分列表有展示上限；完整已提取结果和预算见 JSON。",
+    ]
+    out.extend(f"- {clean(warning)}" for warning in report.warnings)
+    out += ["", "---", "Generated by RepoLens 0.1.0", ""]
+    return "\n".join(out)

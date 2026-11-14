@@ -1,0 +1,155 @@
+# RepoLens
+
+**用可追溯的源码证据，快速了解一个 GitHub 仓库。**
+
+RepoLens 是面向学习者和开发者的只读命令行工具：输入公开 GitHub 地址或本地目录，生成中文 Markdown 分析报告，也可导出结构化 JSON。不需要大模型 API、不克隆或执行被分析项目、不安装其依赖。
+
+> v0.1 聚焦可靠的静态分析。它不会自动理解业务架构，也不会把静态 import 当作真实函数调用图。项目尚未发布到 PyPI，请按下方源码安装。
+
+## 能做什么
+
+| 功能 | 实现范围 |
+| --- | --- |
+| 远端仓库分析 | GitHub REST API；支持分支、tag、SHA，解析后固定同一提交 |
+| 本地目录分析 | 不依赖 Git；读取当前目录，支持根 `.gitignore` |
+| 工程概览 | 文件清单、按扩展名统计语言、README / LICENSE / 测试 / CI 线索 |
+| 依赖解析 | PEP 621 / Poetry / dependency-groups、requirements、setup.cfg、package.json |
+| CMake 线索 | 正则提取 find_package / add_executable，明确标为推断 |
+| Python AST | 类、函数、方法、异步函数、静态导入、入口守卫、调用表达式行号 |
+| 源码追溯 | 远端报告附固定提交和行号链接 |
+| 输出 | 中文 Markdown、带 `schema_version` 的 JSON |
+| 资源控制 | 文件数、单文件大小、总字节、目录条目、API 请求预算与超时 |
+| 失败处理 | 网络重试、限流提示、部分报告告警、禁止默认覆盖输出文件 |
+
+## Windows 快速开始
+
+需要 Python 3.11 或更高版本。解压源码包后，进入含 `pyproject.toml` 的 `repolens` 文件夹，打开 PowerShell：
+
+```powershell
+py -3 --version
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m repolens version
+```
+
+这些命令直接使用虚拟环境的 Python，无需激活脚本或修改 PowerShell 执行策略。若 `py -3 --version` 低于 3.11，先安装新版 Python。
+
+先运行附带的离线示例（只需安装本工具的依赖，不需要 GitHub Token）：
+
+```powershell
+.\.venv\Scripts\python.exe -m repolens analyze .\examples\demo_repo --local -o demo-report.md
+```
+
+再分析真实仓库：
+
+```powershell
+.\.venv\Scripts\python.exe -m repolens analyze https://github.com/pallets/click -o click-report.md
+```
+
+用 VS Code 或其他 Markdown 阅读器打开报告。已附示例见 [examples/demo-report.md](examples/demo-report.md)。
+
+真实项目样本报告：[Click 8.1.7](examples/reports/click-8.1.7.md)（由校验过哈希的真实源码数据回放生成；直连验证遇到匿名限流，细节见验证记录）。
+
+## macOS / Linux 安装
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -e '.[dev]'
+.venv/bin/python -m repolens analyze examples/demo_repo --local -o demo-report.md
+```
+
+激活虚拟环境后可直接使用 `repolens`，与 `python -m repolens` 等价。
+
+## 更多用法
+
+以下示例假设已经激活虚拟环境；也可将 `repolens` 替换为上面的完整 Python 路径加 `-m repolens`。
+
+```bash
+# 1. GitHub 默认分支
+repolens analyze https://github.com/pallets/click -o click.md
+
+# 2. 本地项目，JSON 可供其他工具消费
+repolens analyze ./examples/demo_repo --local --format json -o demo.json
+
+# 3. 指定 tag；owner/repo 简写也支持
+repolens analyze pallets/click --ref 8.1.7 -o click-8.1.7.md
+
+# 4. 分析本项目，增加文件预算
+repolens analyze . --local --max-files 100 -o self-report.md
+
+# 5. 覆盖已有报告（必须显式指定）
+repolens analyze ./examples/demo_repo --local -o demo.md --force
+
+# 查看全部参数
+repolens analyze --help
+```
+
+存在的本地目录优先识别为本地模式。远端请优先使用完整 GitHub URL，以免与同名目录混淆。URL 只接受仓库首页；`/tree/...`、`/blob/...` 地址请改用 `--ref`。本地目录包含空格时加引号。
+
+### GitHub Token（可选）
+
+公开仓库可以匿名读取，但匿名配额通常为每个 IP 每小时 60 次；受共享 IP、其他程序及 GitHub 二级限流影响。默认一次任务最多 50 个请求、最多尝试读取 35 个文件；重复任务仍消耗配额。
+
+仅在需要时设置环境变量 `GITHUB_TOKEN`。推荐使用细粒度 Token，对指定仓库开放 Metadata 和 Contents 的读取权限，无需写权限。不要将 Token 写入代码、README、报告或命令参数。Windows 可使用安全输入：
+
+```powershell
+$tokenInput = Read-Host "GitHub Token" -AsSecureString
+$env:GITHUB_TOKEN = [System.Net.NetworkCredential]::new("", $tokenInput).Password
+.\.venv\Scripts\python.exe -m repolens analyze pallets/click -o click.md
+Remove-Item Env:GITHUB_TOKEN
+Remove-Variable tokenInput
+```
+
+私有仓库仅在 Token 有权限时可读；程序不为 Token 赋予任何额外权限。若网络无法访问 GitHub，可在自己电脑上下载或克隆可信仓库后使用 `--local`。
+
+### 预算和完整性
+
+| 参数 | 默认值 | 含义 |
+| --- | ---: | --- |
+| `--max-files` | 35 | 最多尝试读取的候选文件数 |
+| `--max-file-bytes` | 256000 | 单文件大小上限 |
+| `--max-total-bytes` | 5000000 | 内容读取总预算 |
+| `--max-entries` | 20000 | 目录清单条目上限 |
+| `--max-requests` | 50 | 含重试的 API 请求预算 |
+| `--timeout` | 20 | 单次网络操作超时秒数，不是任务总时限 |
+
+优先读取配置、README、常见入口，再读取一般 Python 文件，最后读取测试与示例。只下载需要的 blob，优先级相同按目录深度和路径排序。
+
+远端至少需要元数据、提交和目录树请求。目录树截断、文件过大、语法错误、内容阶段断网或限流均在报告中注明；**“未发现”仅针对已扫描范围**。元数据阶段失败返回退出码 1；有效但有告警的部分报告返回 0；参数错误返回 2。自动化调用需同时检查 JSON 的 `inventory_complete`、`eligible_files`、`analyzed_files` 和 `warnings`。
+
+## 验证与开发
+
+```bash
+python -m pytest --cov=repolens --cov-report=term-missing
+python -m ruff check .
+python -m ruff format --check .
+python -m build
+```
+
+测试使用临时目录和 HTTP 模拟响应，无需 GitHub Token 或联网；默认不会对真实仓库发请求。CI 配置覆盖 Ubuntu / Windows 的 Python 3.11、3.12、3.13。是否实际跑过以及本次结果见 [docs/VALIDATION.md](docs/VALIDATION.md)。
+
+核心结构：`sources.py` 获取快照；`analyzer.py` 提取证据；`models.py` 定义 JSON 契约；`render.py` 生成报告；`cli.py` 处理参数和输出。
+
+详细设计见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，发布步骤见 [docs/GITHUB_GUIDE.md](docs/GITHUB_GUIDE.md)，学习及项目经历整理见 [docs/LEARNING.md](docs/LEARNING.md)。
+
+## 边界
+
+- Python 深度分析；C++、Java、TypeScript 等暂不做 AST、完整调用图或业务语义总结。
+- import 关系仅静态匹配常见根目录和 `src/` 布局；不解释动态导入、`sys.path` 修改和复杂 monorepo 包映射。
+- 不读取所有文件；不展开依赖锁文件、递归 requirements 引用或远端依赖 URL；`setup.py` 仅分析符号，不提取其中的依赖声明。
+- 本地只读取根 `.gitignore`，不调用 Git；忽略规则并不等价于完整 Git 工作树语义。
+- 不跟随符号链接、子模块，不解压下载的项目，不执行安装脚本。不要在分析期间主动改写目录中的链接；这不是针对恶意并发文件系统变更的沙箱。
+- 常见 `.env` / 私钥文件被排除，但普通源码、配置、路径中仍可能含敏感信息。报告公开前请自行审阅。
+- 不内置 LLM、Web 页面、缓存或自动发布；不保证项目名在 PyPI 可用。
+
+## 路线图
+
+- [x] GitHub + 本地目录，中文 Markdown + JSON
+- [x] 预算控制、失败处理、源码证据、离线测试
+- [ ] 对固定 blob SHA 做可选本地缓存
+- [ ] 扩展 C++ / TypeScript 解析器
+- [ ] 可选 LLM 解释层，要求引用静态证据并显示费用预算
+
+MIT License。欢迎通过 Issue 和 Pull Request 提出问题；不要提交包含真实密钥的测试样本。
+
+参考：[Git trees](https://docs.github.com/en/rest/git/trees)、[Git blobs](https://docs.github.com/en/rest/git/blobs)、[API 限流](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api)、[Python AST](https://docs.python.org/3/library/ast.html)。

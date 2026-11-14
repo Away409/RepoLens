@@ -1,0 +1,7 @@
+[project]
+name = "tiny-tasks-demo"
+version = "0.1.0"
+dependencies = []
+
+[project.scripts]
+tiny-tasks = "demo.__main__:main"
