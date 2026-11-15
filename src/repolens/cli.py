@@ -61,6 +61,11 @@ def analyze_command(
     format: Annotated[str, typer.Option("--format", help="markdown 或 json")] = "markdown",
     local: Annotated[bool, typer.Option("--local", help="明确将 target 视为本地目录")] = False,
     ref: Annotated[str | None, typer.Option("--ref", help="远端分支、tag 或提交 SHA")] = None,
+    no_cache: Annotated[bool, typer.Option("--no-cache", help="禁用远端磁盘缓存")] = False,
+    cache_dir: Annotated[
+        Path | None,
+        typer.Option("--cache-dir", envvar="REPOLENS_CACHE_DIR", help="远端磁盘缓存目录"),
+    ] = None,
     max_files: Annotated[int, typer.Option(min=1, max=1000)] = 35,
     max_file_bytes: Annotated[int, typer.Option(min=1, max=2_000_000)] = 256_000,
     max_total_bytes: Annotated[int, typer.Option(min=1, max=100_000_000)] = 5_000_000,
@@ -92,7 +97,12 @@ def analyze_command(
         if is_local:
             snapshot = local_snapshot(Path(target), limits)
         else:
-            with GitHubSource(limits, token=os.environ.get("GITHUB_TOKEN")) as client:
+            with GitHubSource(
+                limits,
+                token=os.environ.get("GITHUB_TOKEN"),
+                use_cache=not no_cache,
+                cache_dir=cache_dir,
+            ) as client:
                 snapshot = client.snapshot(target, ref)
         report = analyze(snapshot, limits)
         content = report.model_dump_json(indent=2) + "\n" if format == "json" else markdown(report)

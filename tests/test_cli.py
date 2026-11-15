@@ -5,13 +5,14 @@ import pytest
 from typer.testing import CliRunner
 
 from repolens.cli import app, write_report
+from repolens.models import Snapshot
 from repolens.sources import RepoLensError
 
 runner = CliRunner()
 
 
 def test_version_and_help():
-    assert "0.1.0" in runner.invoke(app, ["version"]).stdout
+    assert "0.2.0" in runner.invoke(app, ["version"]).stdout
     assert runner.invoke(app, ["analyze", "--help"]).exit_code == 0
 
 
@@ -69,3 +70,33 @@ def test_demo_fixture_end_to_end(tmp_path):
     text = output.read_text(encoding="utf-8")
     assert "tiny-tasks" in text
     assert "Task" in text
+
+
+@pytest.mark.parametrize("no_cache", [False, True])
+def test_remote_cli_cache_options(tmp_path, monkeypatch, no_cache):
+    env_directory = tmp_path / "env-cache"
+    cli_directory = tmp_path / "cli-cache"
+    monkeypatch.setenv("REPOLENS_CACHE_DIR", str(env_directory))
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    class RemoteSource:
+        def __init__(self, limits, *, token, use_cache, cache_dir):
+            assert token is None
+            assert use_cache is not no_cache
+            assert cache_dir == (cli_directory if no_cache else env_directory)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def snapshot(self, target, ref):
+            return Snapshot(name=target, source="github")
+
+    monkeypatch.setattr("repolens.cli.GitHubSource", RemoteSource)
+    args = ["analyze", "https://github.com/acme/app", "--format", "json"]
+    if no_cache:
+        args += ["--no-cache", "--cache-dir", str(cli_directory)]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 0, result.exception

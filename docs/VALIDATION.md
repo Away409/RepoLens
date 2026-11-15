@@ -1,73 +1,47 @@
-# v0.1.0 验证记录
+# v0.2.0 验证记录
 
-日期：2026-11-14。执行环境：Linux / Python 3.12.14。
+日期：2026-11-15。
 
-## 已完成
+## 本地验证
+
+环境为 Windows / Python 3.13.7。测试通过临时目录和 `httpx.MockTransport` 运行。
 
 | 检查 | 结果 |
 | --- | --- |
-| pytest 离线测试 | 63 passed |
-| 覆盖率（含分支） | 93.17% |
-| Ruff 静态检查 | 通过 |
-| Ruff 格式检查 | 通过 |
+| pytest 离线测试 | 93 通过，1 跳过 |
+| 覆盖率（启用分支覆盖） | 93%（终端显示的总覆盖率） |
+| Ruff 静态检查及格式检查 | 通过 |
 | sdist + wheel 构建 | 通过 |
-| 新虚拟环境安装 wheel | 通过 |
-| 已安装 wheel 的离线 CLI | 成功生成 JSON；3 个模块、1 条内部导入边 |
-| 离线 Markdown 示例 | 成功生成并检查入口、行号、模块、范围提示 |
-| 真实 Click 8.1.7 样本回放 | 15 个 blob 内容哈希校验一致，13 个 Python 模块成功解析 |
 
-覆盖率统计没有覆盖独立子进程的 `python -m repolens`，但该入口已在安装包烟雾测试中单独执行。
+Windows 本地环境缺少创建符号链接的权限，因此跳过对应本地测试。远端符号链接过滤另有模拟测试。新增测试覆盖缓存命中和绕过、Git 内容哈希和损坏、容量淘汰、并发事务、ETag 304、限流、预算及报告图和统计。
 
-## 真实项目样本如何取得
+## GitHub Actions
 
-直接使用本工具访问 `octocat/Hello-World` 和 `pallets/click` 时遇到 GitHub 匿名限流，工具按设计返回退出码 1 和可操作的限流提示。**本次没有完成直连 GitHub 的端到端成功验证。**
+[RepoLens CI 工作流](https://github.com/Away409/RepoLens/actions/workflows/ci.yml)在 Ubuntu / Windows 分别运行 Python 3.11、3.12、3.13，每项执行安装、离线测试与覆盖率、Ruff 检查、格式检查及构建。每个提交的实际结果见对应 PR 的 Checks 页和工作流运行记录。
 
-另通过可用的授权只读连接获取 Click 8.1.7 的仓库元数据、提交、目录树和 15 个文件，将文件内容按 Git blob 规则计算 SHA-1，15 个全部匹配目录树。随后通过 HTTP 模拟传输回放这些真实数据，运行原有 `GitHubSource → analyze → markdown` 路径。
+工作流固定到官方发布的 [actions/checkout v7.0.1](https://github.com/actions/checkout/releases/tag/v7.0.1) 和 [actions/setup-python v7.0.0](https://github.com/actions/setup-python/releases/tag/v7.0.0) 的完整提交 SHA。
 
-- 仓库：`https://github.com/pallets/click`
-- 固定提交：`874ca2bc1c30d93a4ac6e36a15ed685eafe89097`
-- 原始树条目：170
-- 过滤后的文件清单：146
-- 内容候选：84
-- 读取预算 / 实际读取：15 / 15
-- Python 模块：13
-- 静态内部导入边：144（含条件导入等，非运行时调用图）
-- 模拟传输请求数：18
+## 真实 GitHub REST API 冒烟测试
 
-报告：[Markdown](../examples/reports/click-8.1.7.md) · [JSON](../examples/reports/click-8.1.7.json)。报告中也注明验证方式，避免与直接联网结果混淆。样本没有打包第三方完整源码；README 摘录和源码链接保留出处。
+使用 v0.2.0 CLI 匿名访问公开仓库 `Away409/RepoLens` 的固定提交 `b627c0515eddd20a8df1cdf12e613098d40fa905`。使用空的专用缓存目录，连续分析两次。两次文件清单均完整（28 个文件），均根据文件预算读取了 17 个候选文本中的 5 个，共 14,453 字节。
 
-该版本 Click 的依赖声明在 `setup.py` 中，因此本工具没有提取到依赖，并显式记录此限制。报告中的空依赖列表不表示 Click 没有依赖。
+| 指标 | 首次 | 再次 |
+| --- | ---: | ---: |
+| HTTP 请求总数 | 8 | 3 |
+| 已校验的网络 Blob 读取 | 5 | 0 |
+| Blob 缓存命中 | 0 | 5 |
+| 条件请求返回 304 | 0 | 2 |
+| 候选文本全部读取 | 否 | 否 |
 
-## 验证期间修复
+复现时将缓存目录换成一个空目录，确认运行环境未设置 `GITHUB_TOKEN`：
 
-1. SOCKS 代理缺少 `socksio`：将 `httpx[socks]` 纳入安装依赖，初始化失败时提供安全提示。
-2. 示例 README 抢占内容预算：优先读取项目核心源码，再读取测试、示例和文档；增加回归测试。
-3. `setup.py` 依赖提取边界：添加明确告警和回归测试。
+```powershell
+python -m repolens analyze Away409/RepoLens --ref b627c0515eddd20a8df1cdf12e613098d40fa905 --max-files 5 --cache-dir ./repolens-smoke-cache --format json -o smoke-cold.json
+python -m repolens analyze Away409/RepoLens --ref b627c0515eddd20a8df1cdf12e613098d40fa905 --max-files 5 --cache-dir ./repolens-smoke-cache --format json -o smoke-warm.json
+```
 
-## 已验证的异常场景
+两次运行都通过网络确认元数据、固定提交和目录树。请求数反映 RepoLens 的预算消耗，GitHub 匿名配额消耗取决于服务端。真实私有仓库权限及长时间断网恢复尚未实测。
 
-无效 URL、非 GitHub 主机、401 / 403 / 404 / 409 / 422 / 429、重定向、网络超时、服务暂时不可用、请求预算耗尽、树截断、超大响应、坏 JSON、非法配置、Python 语法错误、非 UTF-8 文本、Python 编码声明、文件预算、总字节预算、符号链接、忽略规则、带空格路径、已有报告覆盖保护、标准输出与状态分离。
+## v0.1.0 历史样例
 
-## 未验证或尚未提供
-
-- 未在真实 Windows 机器运行；仓库已提供 Windows / Ubuntu、Python 3.11–3.13 CI 配置，须推送后确认结果。
-- 未验证私有仓库 Token 权限与长时间真实网络故障恢复。
-- 没有面向百万文件仓库的性能承诺。
-- 没有 LLM 业务总结、完整动态调用图或 C++ AST。
-- 未发布到 GitHub 或 PyPI。
-
-## 本次依赖版本
-
-| 依赖 | 版本 |
-| --- | --- |
-| httpx | 0.28.1 |
-| socksio | 1.0.0 |
-| pydantic | 2.14.3 |
-| typer | 0.29.1 |
-| pathspec | 0.12.1 |
-| pytest | 9.2.0 |
-| pytest-cov | 7.1.0 |
-| ruff | 0.17.5 |
-| build | 1.6.1 |
-
-版本范围在 `pyproject.toml`，以上是本次实测环境而非所有支持版本的穷举保证。
+[Click 的 Markdown 样例](../examples/reports/click-8.1.7.md)和 [JSON 样例](../examples/reports/click-8.1.7.json)来自 v0.1.0。样例将 Click 8.1.7 的 15 个真实文件按 Git blob 规则核对 SHA 后，通过模拟 HTTP 回放生成。当时直连 GitHub 遇到匿名限流。

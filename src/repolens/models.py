@@ -16,8 +16,18 @@ class Limits(BaseModel):
 
 class FileEntry(BaseModel):
     path: str
-    size: int = 0
+    size: int = Field(default=0, ge=0)
     sha: str | None = None
+
+
+class RemoteReads(BaseModel):
+    cache_enabled: bool = False
+    blob_cache_hits: int = 0
+    blob_cache_misses: int = 0
+    blob_network_reads: int = 0
+    not_modified: int = 0
+    request_budget_exhausted: bool = False
+    rate_limited: bool = False
 
 
 class Snapshot(BaseModel):
@@ -34,6 +44,7 @@ class Snapshot(BaseModel):
     eligible_files: int = 0
     bytes_read: int = 0
     requests: int = 0
+    remote_reads: RemoteReads | None = None
 
 
 class Evidence(BaseModel):
@@ -92,11 +103,13 @@ class Report(BaseModel):
     readme_excerpt: Evidence | None = None
     license: str | None = None
     inventory_complete: bool
+    content_complete: bool | None = None
     file_count: int
     eligible_files: int
     analyzed_files: list[str]
     bytes_read: int
     requests: int
+    remote_reads: RemoteReads | None = None
     limits: Limits
     languages: dict[str, int]
     files: list[str]
