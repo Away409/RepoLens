@@ -4,7 +4,7 @@
 
 RepoLens 是面向学习者和开发者的只读命令行工具：输入公开 GitHub 地址或本地目录，生成中文 Markdown 分析报告，也可导出结构化 JSON。不需要大模型 API、不克隆或执行被分析项目、不安装其依赖。
 
-> v0.1 聚焦可靠的静态分析。它不会自动理解业务架构，也不会把静态 import 当作真实函数调用图。项目尚未发布到 PyPI，请按下方源码安装。
+> v0.2.0 支持公开仓库增量读取、报告读取统计和 Mermaid 模块导入图。请按下方步骤从源码安装。
 
 ## 能做什么
 
@@ -88,7 +88,7 @@ repolens analyze --help
 
 ### GitHub Token（可选）
 
-公开仓库可以匿名读取，但匿名配额通常为每个 IP 每小时 60 次；受共享 IP、其他程序及 GitHub 二级限流影响。默认一次任务最多 50 个请求、最多尝试读取 35 个文件；重复任务仍消耗配额。
+公开仓库可以匿名读取，但匿名配额通常为每个 IP 每小时 60 次；受共享 IP、其他程序及 GitHub 二级限流影响。默认一次任务最多 50 个请求、最多尝试读取 35 个文件。重复分析仍会联系 GitHub 校验元数据、提交和目录树。
 
 仅在需要时设置环境变量 `GITHUB_TOKEN`。推荐使用细粒度 Token，对指定仓库开放 Metadata 和 Contents 的读取权限，无需写权限。不要将 Token 写入代码、README、报告或命令参数。Windows 可使用安全输入：
 
@@ -101,6 +101,20 @@ Remove-Variable tokenInput
 ```
 
 私有仓库仅在 Token 有权限时可读；程序不为 Token 赋予任何额外权限。若网络无法访问 GitHub，可在自己电脑上下载或克隆可信仓库后使用 `--local`。
+
+### 远端缓存
+
+对未设置 `GITHUB_TOKEN` 的公开仓库，默认缓存经过 Git blob SHA 和大小校验的内容，并为仓库元数据、未截断的目录树发送 ETag 条件请求。每次仍重新解析 `--ref`（默认使用本次 GitHub 确认的默认分支）。有效的 304 复用对应响应正文，仍占用一次 RepoLens 请求预算。匿名条件请求是否节省 GitHub 自身配额，以 GitHub 响应为准。
+
+| 参数或设置 | 用途 |
+| --- | --- |
+| `--no-cache` | 跳过磁盘缓存和 ETag 条件请求 |
+| `--cache-dir PATH` | 为这次分析指定缓存目录，优先于环境变量 |
+| `REPOLENS_CACHE_DIR` | 设置默认缓存目录 |
+
+Windows 默认目录为 `%LOCALAPPDATA%\RepoLens\Cache`，macOS / Linux 默认目录为 `$XDG_CACHE_HOME/repolens` 或 `~/.cache/repolens`。缓存使用 `github-v1.sqlite3`，最多保留 64 MiB 数据正文和 4,096 条记录，超限时优先淘汰最久未使用的记录。SQLite 会复用空闲页，数据库文件还包含索引和页开销。在所有 RepoLens 进程退出后可删除该数据库以清空缓存。
+
+带 Token 的请求和本地扫描绕过磁盘缓存。缓存保存匿名可读的源码和元数据，请使用自己控制的目录。缓存不可用或条目损坏时，工具按正常 API 请求预算重新读取；API 请求失败时，报告保留已经读到的内容。
 
 ### 预算和完整性
 
@@ -117,6 +131,15 @@ Remove-Variable tokenInput
 
 远端至少需要元数据、提交和目录树请求。目录树截断、文件过大、语法错误、内容阶段断网或限流均在报告中注明；**“未发现”仅针对已扫描范围**。元数据阶段失败返回退出码 1；有效但有告警的部分报告返回 0；参数错误返回 2。自动化调用需同时检查 JSON 的 `inventory_complete`、`eligible_files`、`analyzed_files` 和 `warnings`。
 
+JSON schema 1.1 新增 `content_complete` 和 `remote_reads`，原有字段保留。本地模式的 `remote_reads` 为 `null`。远端统计包括：
+
+- `requests` 为本次尝试的 HTTP 请求总数，含 304、失败和重试。
+- `remote_reads.blob_cache_hits` / `blob_cache_misses` 按尝试读取的候选文件计数。未启用缓存时两项均为零。
+- `blob_network_reads` 只计已通过 SHA 和大小校验的网络 Blob。`not_modified` 计成功复用已校验正文的 304。
+- `request_budget_exhausted` / `rate_limited` 表示请求预算或限流实际阻止了读取。`bytes_read` 同时计入缓存和网络的内容字节。
+
+有导入边时，Markdown 图展示最多 40 个模块、80 对模块关系，重复导入合并为一条图边；JSON 的 `import_edges` 保留全部已提取边和行号。
+
 ## 验证与开发
 
 ```bash
@@ -124,6 +147,7 @@ python -m pytest --cov=repolens --cov-report=term-missing
 python -m ruff check .
 python -m ruff format --check .
 python -m build
+python tools/verify_wheel.py
 ```
 
 测试使用临时目录和 HTTP 模拟响应，无需 GitHub Token 或联网；默认不会对真实仓库发请求。CI 配置覆盖 Ubuntu / Windows 的 Python 3.11、3.12、3.13。是否实际跑过以及本次结果见 [docs/VALIDATION.md](docs/VALIDATION.md)。
@@ -140,13 +164,13 @@ python -m build
 - 本地只读取根 `.gitignore`，不调用 Git；忽略规则并不等价于完整 Git 工作树语义。
 - 不跟随符号链接、子模块，不解压下载的项目，不执行安装脚本。不要在分析期间主动改写目录中的链接；这不是针对恶意并发文件系统变更的沙箱。
 - 常见 `.env` / 私钥文件被排除，但普通源码、配置、路径中仍可能含敏感信息。报告公开前请自行审阅。
-- 不内置 LLM、Web 页面、缓存或自动发布；不保证项目名在 PyPI 可用。
+- 当前以本地运行的 CLI 为主。
 
 ## 路线图
 
 - [x] GitHub + 本地目录，中文 Markdown + JSON
 - [x] 预算控制、失败处理、源码证据、离线测试
-- [ ] 对固定 blob SHA 做可选本地缓存
+- [x] 固定 blob SHA 缓存、ETag 验证和模块导入图
 - [ ] 扩展 C++ / TypeScript 解析器
 - [ ] 可选 LLM 解释层，要求引用静态证据并显示费用预算
 

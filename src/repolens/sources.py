@@ -1,7 +1,6 @@
 """Read bounded snapshots. Never clone, install or execute target repository code."""
 
 import base64
-import binascii
 import io
 import json
 import logging
@@ -10,13 +9,17 @@ import re
 import stat
 import time
 import tokenize
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote, urlsplit
 
 import httpx
 import pathspec
 
-from .models import FileEntry, Limits, Snapshot
+from . import __version__
+from .cache import GIT_SHA, DiskCache, default_cache_dir, matches_blob
+from .models import FileEntry, Limits, RemoteReads, Snapshot
 
 log = logging.getLogger(__name__)
 IGNORED = {
@@ -35,6 +38,8 @@ IGNORED = {
     "vendor",
 }
 MANIFESTS = {"pyproject.toml", "package.json", "setup.cfg", "cmakelists.txt"}
+ETAG = re.compile(r'(?:W/)?"[\x21\x23-\x7e]{0,256}"')
+RESPONSE_LIMIT = 12_000_000
 
 
 class RepoLensError(Exception):
@@ -63,7 +68,7 @@ def parse_repository(value: str) -> tuple[str, str]:
 def safe_path(value: str) -> bool:
     path = PurePosixPath(value)
     return (
-        bool(value)
+        bool(path.parts)
         and not path.is_absolute()
         and not any(part in {".", ".."} for part in value.split("/"))
         and not any(ord(c) < 32 or c == "\\" for c in value)
@@ -229,13 +234,98 @@ def local_snapshot(root: Path, limits: Limits) -> Snapshot:
     return snapshot
 
 
+def bounded_body(response: httpx.Response, max_bytes: int) -> bytes:
+    raw = bytearray()
+    for chunk in response.iter_bytes():
+        raw.extend(chunk)
+        if len(raw) > max_bytes:
+            raise RepoLensError("GitHub 响应超过大小上限；建议本地分析。")
+    return bytes(raw)
+
+
+def public_metadata(data: dict) -> bool:
+    return (
+        data.get("private") is False
+        and data.get("visibility") == "public"
+        and type(data.get("id")) is int
+        and data["id"] > 0
+        and isinstance(data.get("default_branch"), str)
+        and bool(data["default_branch"])
+    )
+
+
+def valid_tree(data: dict, sha: str) -> bool:
+    """Validate before persisting or reusing a tree, including cached JSON."""
+    if (
+        data.get("sha", sha) != sha
+        or type(data.get("truncated")) is not bool
+        or not isinstance(data.get("tree"), list)
+    ):
+        return False
+    paths = set()
+    for entry in data["tree"]:
+        if not isinstance(entry, dict):
+            return False
+        path = entry.get("path")
+        if not isinstance(path, str) or path in paths:
+            return False
+        paths.add(path)
+        if entry.get("type") not in ("blob", "tree", "commit"):
+            return False
+        if not isinstance(entry.get("mode"), str):
+            return False
+        if entry["type"] == "blob" and entry["mode"] in {"100644", "100755"}:
+            size, blob_sha = entry.get("size"), entry.get("sha")
+            if type(size) is not int or size < 0:
+                return False
+            if not isinstance(blob_sha, str) or not GIT_SHA.fullmatch(blob_sha):
+                return False
+    return True
+
+
+def response_cacheable(response: httpx.Response) -> bool:
+    # Request representation headers are fixed. Unknown Vary fields require a
+    # different cache key, so bypass persistence until those fields are supported.
+    vary = {field.strip().lower() for field in response.headers.get("vary", "").split(",")}
+    return "no-store" not in response.headers.get("cache-control", "").lower() and vary <= {
+        "",
+        "accept",
+        "accept-encoding",
+        "x-github-api-version",
+        "x-requested-with",
+    }
+
+
+@dataclass
+class GitHubResponse:
+    data: dict
+    raw: bytes | None
+    etag: str
+    cacheable: bool
+
+
 class GitHubSource:
-    def __init__(self, limits: Limits, token: str | None = None, transport=None):
+    def __init__(
+        self,
+        limits: Limits,
+        token: str | None = None,
+        transport=None,
+        *,
+        use_cache: bool = True,
+        cache_dir: Path | None = None,
+    ):
         self.limits = limits
         self.requests = 0
+        self.rate_limit_reached = False
+        self.stats = RemoteReads()
+        self.cache = (
+            DiskCache(cache_dir or default_cache_dir()) if use_cache and not token else None
+        )
         headers = {
             "Accept": "application/vnd.github+json",
-            "User-Agent": "RepoLens/0.1",
+            "Accept-Encoding": "identity",
+            "X-Requested-With": "RepoLens",
+            "User-Agent": f"RepoLens/{__version__}",
             "X-GitHub-Api-Version": "2022-11-28",
         }
         if token:
@@ -259,23 +349,75 @@ class GitHubSource:
     def __exit__(self, *_args):
         self.client.close()
 
-    def get(self, path: str, max_bytes: int = 12_000_000) -> dict:
+    def get(self, path: str, max_bytes: int = RESPONSE_LIMIT) -> dict:
+        return self._request(path, max_bytes=max_bytes).data
+
+    def _conditional_get(
+        self, path: str, cache_key: str, cacheable: Callable[[dict], bool]
+    ) -> dict:
+        if self.cache is None:
+            return self.get(path)
+        validator = None
+        cached = self.cache.get(cache_key, RESPONSE_LIMIT)
+        if cached is not None:
+            raw, etag = cached
+            try:
+                data = json.loads(raw)
+                if isinstance(data, dict) and etag and ETAG.fullmatch(etag) and cacheable(data):
+                    validator = (etag, data)
+            except (ValueError, RecursionError):
+                pass
+
+        result = self._request(path, validator=validator)
+        if not result.cacheable:
+            self.cache.discard(cache_key)
+        elif result.raw is not None:
+            if ETAG.fullmatch(result.etag) and cacheable(result.data):
+                self.cache.put(cache_key, result.raw, result.etag)
+            else:
+                self.cache.discard(cache_key)
+        return result.data
+
+    def _request(
+        self,
+        path: str,
+        max_bytes: int = RESPONSE_LIMIT,
+        *,
+        validator: tuple[str, dict] | None = None,
+    ) -> GitHubResponse:
+        headers = {"If-None-Match": validator[0]} if validator else {}
         for attempt in range(3):
+            if self.rate_limit_reached:
+                self.stats.rate_limited = True
+                raise RepoLensError("GitHub API 限流；稍后重试，或设置 GITHUB_TOKEN。")
             if self.requests >= self.limits.max_requests:
+                self.stats.request_budget_exhausted = True
                 raise RepoLensError("API 请求预算已用尽；增大 --max-requests 或使用本地模式。")
             self.requests += 1
             log.info("GitHub GET request %d", self.requests)
             try:
-                with self.client.stream("GET", path) as response:
+                with self.client.stream("GET", path, headers=headers) as response:
                     status = response.status_code
+                    self.rate_limit_reached = response.headers.get("x-ratelimit-remaining") == "0"
                     if status == 429 or (
                         status == 403
                         and (
-                            response.headers.get("x-ratelimit-remaining") == "0"
+                            self.rate_limit_reached
                             or "retry-after" in response.headers
+                            or self._secondary_limit(response)
                         )
                     ):
+                        self.rate_limit_reached = self.stats.rate_limited = True
                         raise RepoLensError("GitHub API 限流；稍后重试，或设置 GITHUB_TOKEN。")
+                    etag = response.headers.get("etag", "")
+                    store = response_cacheable(response)
+                    if status == 304:
+                        if validator is None:
+                            raise RepoLensError("GitHub 返回 304，但没有可用的缓存数据。")
+                        if etag and etag.removeprefix("W/") != validator[0].removeprefix("W/"):
+                            raise RepoLensError("GitHub 返回 304，但 ETag 与条件请求不符。")
+                        self.stats.not_modified += 1
+                        return GitHubResponse(validator[1], None, etag, store)
                     if status in {502, 503, 504} and attempt < 2:
                         time.sleep(0.5 * (attempt + 1))
                         continue
@@ -290,15 +432,13 @@ class GitHubSource:
                         raise RepoLensError("仓库可能已迁移；请使用 GitHub 显示的最新地址。")
                     if status >= 400:
                         raise RepoLensError(errors.get(status, f"GitHub API 返回 HTTP {status}。"))
-                    raw = bytearray()
-                    for chunk in response.iter_bytes():
-                        raw.extend(chunk)
-                        if len(raw) > max_bytes:
-                            raise RepoLensError("GitHub 响应超过大小上限；建议本地分析。")
+                    if status != 200:
+                        raise RepoLensError(f"GitHub API 返回非预期 HTTP {status}。")
+                    raw = bounded_body(response, max_bytes)
                     data = json.loads(raw)
                     if not isinstance(data, dict):
                         raise ValueError("expected object")
-                    return data
+                    return GitHubResponse(data, raw, etag, status == 200 and store)
             except (httpx.TimeoutException, httpx.NetworkError):
                 if attempt == 2:
                     raise RepoLensError(
@@ -307,32 +447,87 @@ class GitHubSource:
                 time.sleep(0.5 * (attempt + 1))
             except httpx.HTTPError:
                 raise RepoLensError("GitHub HTTP 传输失败；请检查网络连接。") from None
-            except (ValueError, UnicodeError):
+            except (ValueError, RecursionError):
                 raise RepoLensError("GitHub 返回了无法解析的数据。") from None
         raise RepoLensError("GitHub 请求失败。")
 
+    @staticmethod
+    def _secondary_limit(response: httpx.Response) -> bool:
+        try:
+            raw = bounded_body(response, 16_384).lower()
+            return b"secondary rate limit" in raw or b"abuse detection" in raw
+        except RepoLensError:
+            return False
+
+    def _read_blob(self, prefix: str, scope: str | None, entry: FileEntry) -> bytes:
+        if not entry.sha or not GIT_SHA.fullmatch(entry.sha):
+            raise RepoLensError("无效的 Git blob 标识。")
+        key = f"{scope}:blob:{entry.sha.lower()}" if scope else None
+        if self.cache is not None and key:
+            cached = self.cache.get(key, entry.size)
+            if cached is not None and matches_blob(cached[0], entry.sha, entry.size):
+                self.stats.blob_cache_hits += 1
+                return cached[0]
+            self.stats.blob_cache_misses += 1
+        response = self._request(
+            f"{prefix}/git/blobs/{entry.sha}",
+            max_bytes=self.limits.max_file_bytes * 2 + 10_000,
+        )
+        blob = response.data
+        if blob.get("encoding") != "base64" or not isinstance(blob.get("content"), str):
+            raise RepoLensError("GitHub blob 格式不受支持。")
+        try:
+            data = base64.b64decode("".join(blob["content"].split()), validate=True)
+        except ValueError:
+            raise RepoLensError("GitHub blob 内容损坏。") from None
+        if not matches_blob(data, entry.sha, entry.size):
+            raise RepoLensError("GitHub blob 内容与目录树的 SHA 或大小不符。")
+        self.stats.blob_network_reads += 1
+        if self.cache is not None and key and response.cacheable:
+            self.cache.put(key, data)
+        return data
+
     def snapshot(self, target: str, ref: str | None = None) -> Snapshot:
+        self.requests = 0
+        self.rate_limit_reached = False
+        self.stats = RemoteReads()
         owner, repo = parse_repository(target)
         prefix = f"/repos/{owner}/{repo}"
-        meta = self.get(prefix)
+        # Tie validators to the API representation, including URL case and query.
+        meta = self._conditional_get(prefix, f"repo:{prefix}", public_metadata)
+        scope = None
+        if self.cache is not None and public_metadata(meta):
+            scope = f"{owner.lower()}/{repo.lower()}:{meta['id']}"
+            self.stats.cache_enabled = True
         try:
             commit = self.get(f"{prefix}/commits/{quote(ref or meta['default_branch'], safe='')}")
             sha = commit["sha"]
             tree_sha = commit["commit"]["tree"]["sha"]
-            if not all(re.fullmatch(r"[a-fA-F0-9]{40,64}", s) for s in (sha, tree_sha)):
+            if not all(GIT_SHA.fullmatch(s) for s in (sha, tree_sha)):
                 raise ValueError("invalid sha")
-            tree = self.get(f"{prefix}/git/trees/{tree_sha}?recursive=1")
+            tree_path = f"{prefix}/git/trees/{tree_sha}?recursive=1"
+            if scope:
+                tree = self._conditional_get(
+                    tree_path,
+                    f"{scope}:tree:{tree_path}",
+                    lambda data: valid_tree(data, tree_sha) and data.get("truncated") is False,
+                )
+            else:
+                tree = self.get(tree_path)
+            if not valid_tree(tree, tree_sha):
+                raise ValueError("invalid tree")
+            license_info = meta.get("license")
+            if license_info is not None and not isinstance(license_info, dict):
+                raise ValueError("invalid license")
             snapshot = Snapshot(
                 name=f"{owner}/{repo}",
                 source="github",
                 url=f"https://github.com/{owner}/{repo}",
                 revision=sha,
                 description=meta.get("description") or "",
-                license=(meta.get("license") or {}).get("spdx_id"),
+                license=(license_info or {}).get("spdx_id"),
             )
             entries = tree["tree"]
-            if not isinstance(entries, list):
-                raise ValueError("invalid tree")
             if tree.get("truncated") or len(entries) > self.limits.max_entries:
                 snapshot.inventory_complete = False
                 snapshot.warnings.append("远端目录树被截断或超过条目上限；不能据此判定文件不存在。")
@@ -345,26 +540,15 @@ class GitHubSource:
                     and not excluded(path)
                 ):
                     snapshot.entries.append(
-                        FileEntry(path=path, size=entry.get("size", 0), sha=entry["sha"])
+                        FileEntry(path=path, size=entry["size"], sha=entry["sha"])
                     )
             snapshot.entries.sort(key=lambda e: e.path)
 
-            def read(entry):
-                if not entry.sha or not re.fullmatch(r"[a-fA-F0-9]{40,64}", entry.sha):
-                    raise RepoLensError("无效的 Git blob 标识。")
-                blob = self.get(
-                    f"{prefix}/git/blobs/{entry.sha}",
-                    max_bytes=self.limits.max_file_bytes * 2 + 10_000,
-                )
-                if blob.get("encoding") != "base64" or not isinstance(blob.get("content"), str):
-                    raise RepoLensError("GitHub blob 格式不受支持。")
-                try:
-                    return base64.b64decode("".join(blob["content"].split()), validate=True)
-                except (ValueError, binascii.Error):
-                    raise RepoLensError("GitHub blob 内容损坏。") from None
-
-            load_contents(snapshot, self.limits, read)
+            load_contents(
+                snapshot, self.limits, lambda entry: self._read_blob(prefix, scope, entry)
+            )
             snapshot.requests = self.requests
+            snapshot.remote_reads = self.stats
             return snapshot
         except (KeyError, TypeError, ValueError):
             raise RepoLensError("GitHub 元数据格式异常，无法构建仓库快照。") from None

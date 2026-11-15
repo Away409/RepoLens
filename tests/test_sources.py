@@ -1,4 +1,5 @@
 import base64
+import hashlib
 from pathlib import Path
 
 import httpx
@@ -17,7 +18,8 @@ from repolens.sources import (
 
 SHA = "a" * 40
 TREE = "b" * 40
-BLOB = "c" * 40
+DATA = b"print('ok')\n"
+BLOB = hashlib.sha1(b"blob 12\0" + DATA, usedforsecurity=False).hexdigest()
 
 
 @pytest.mark.parametrize(
@@ -66,13 +68,19 @@ def remote_handler(request):
                     {"path": "main.py", "type": "blob", "mode": "100644", "size": 12, "sha": BLOB},
                     {"path": "secret.py", "type": "blob", "mode": "120000", "sha": BLOB},
                     {"path": "sub", "type": "commit", "mode": "160000", "sha": BLOB},
-                    {"path": "../escape.py", "type": "blob", "mode": "100644", "sha": BLOB},
+                    {
+                        "path": "../escape.py",
+                        "type": "blob",
+                        "mode": "100644",
+                        "sha": BLOB,
+                        "size": 12,
+                    },
                 ],
             },
         )
     if path.endswith(f"/git/blobs/{BLOB}"):
         return httpx.Response(
-            200, json={"encoding": "base64", "content": base64.b64encode(b"print('ok')\n").decode()}
+            200, json={"encoding": "base64", "content": base64.b64encode(DATA).decode()}
         )
     raise AssertionError(path)
 
@@ -84,7 +92,7 @@ def test_remote_snapshot_is_commit_pinned_and_excludes_symlinks():
         requests.append(request)
         return remote_handler(request)
 
-    with GitHubSource(Limits(), transport=httpx.MockTransport(handler)) as client:
+    with GitHubSource(Limits(), transport=httpx.MockTransport(handler), use_cache=False) as client:
         snap = client.snapshot("acme/demo", "feature/x")
     assert snap.revision == SHA
     assert snap.contents == {"main.py": "print('ok')\n"}
@@ -123,7 +131,7 @@ def test_retry_transient_failure(monkeypatch):
         calls.append(request)
         return httpx.Response(503) if len(calls) < 3 else httpx.Response(200, json={"ok": True})
 
-    with GitHubSource(Limits(), transport=httpx.MockTransport(handler)) as client:
+    with GitHubSource(Limits(), transport=httpx.MockTransport(handler), use_cache=False) as client:
         assert client.get("/test") == {"ok": True}
         assert client.requests == 3
 
@@ -134,7 +142,7 @@ def test_timeout_retries_bounded(monkeypatch):
     def handler(request):
         raise httpx.ConnectTimeout("secret proxy details", request=request)
 
-    with GitHubSource(Limits(), transport=httpx.MockTransport(handler)) as client:
+    with GitHubSource(Limits(), transport=httpx.MockTransport(handler), use_cache=False) as client:
         with pytest.raises(RepoLensError, match="超时") as error:
             client.get("/test")
         assert client.requests == 3
@@ -143,7 +151,7 @@ def test_timeout_retries_bounded(monkeypatch):
 
 def test_request_budget_retains_partial_report():
     with GitHubSource(
-        Limits(max_requests=3), transport=httpx.MockTransport(remote_handler)
+        Limits(max_requests=3), transport=httpx.MockTransport(remote_handler), use_cache=False
     ) as client:
         snap = client.snapshot("acme/demo")
     assert snap.entries
@@ -160,7 +168,7 @@ def test_truncated_tree_is_explicit():
             data["truncated"] = True
         return httpx.Response(200, json=data)
 
-    with GitHubSource(Limits(), transport=httpx.MockTransport(handler)) as client:
+    with GitHubSource(Limits(), transport=httpx.MockTransport(handler), use_cache=False) as client:
         snap = client.snapshot("acme/demo")
     assert not snap.inventory_complete
     assert any("截断" in w for w in snap.warnings)
@@ -186,7 +194,7 @@ def test_response_byte_limit():
 def put(root: Path, name: str, text: str = "pass\n"):
     path = root / name
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    path.write_text(text, encoding="utf-8", newline="\n")
 
 
 def test_local_filters_and_never_executes(tmp_path):

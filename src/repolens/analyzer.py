@@ -270,7 +270,7 @@ def python_module(path: str, text: str) -> tuple[PythonModule, list[Evidence]]:
 
 def module_name(path: str) -> str:
     parts = list(PurePosixPath(path).with_suffix("").parts)
-    if parts[0] == "src":
+    if len(parts) > 1 and parts[0] == "src":
         parts.pop(0)
     if parts[-1] == "__init__":
         parts.pop()
@@ -305,6 +305,7 @@ def import_edges(modules: list[PythonModule], paths: list[str]) -> list[Edge]:
 def analyze(snapshot: Snapshot, limits: Limits) -> Report:
     paths = sorted(entry.path for entry in snapshot.entries)
     report = Report(
+        schema_version="1.1",
         name=snapshot.name,
         source=snapshot.source,
         url=snapshot.url,
@@ -312,11 +313,13 @@ def analyze(snapshot: Snapshot, limits: Limits) -> Report:
         description=snapshot.description,
         license=snapshot.license,
         inventory_complete=snapshot.inventory_complete,
+        content_complete=len(snapshot.contents) == snapshot.eligible_files,
         file_count=len(paths),
         eligible_files=snapshot.eligible_files,
         analyzed_files=sorted(snapshot.contents),
         bytes_read=snapshot.bytes_read,
         requests=snapshot.requests,
+        remote_reads=snapshot.remote_reads,
         limits=limits,
         languages=dict(
             Counter(

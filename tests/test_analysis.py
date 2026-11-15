@@ -1,10 +1,28 @@
 import json
+import re
 
 import pytest
 
-from repolens.analyzer import analyze, import_edges, parse_manifest, python_module
-from repolens.models import FileEntry, Limits, Report, Snapshot
+from repolens.analyzer import analyze, import_edges, module_name, parse_manifest, python_module
+from repolens.models import Edge, FileEntry, Limits, Report, Snapshot
 from repolens.render import markdown
+
+
+def test_root_src_module_and_src_layout_resolve_without_crashing():
+    paths = ["src.py", "main.py", "src/pkg/core.py"]
+    assert module_name("src.py") == "src"
+    assert module_name("src/pkg/core.py") == "pkg.core"
+    snapshot = Snapshot(
+        name="demo",
+        source="local",
+        entries=[FileEntry(path=p) for p in paths],
+        contents={"main.py": "import src\nfrom pkg import core\n", "src.py": "pass\n"},
+    )
+    report = analyze(snapshot, Limits())
+    assert {(edge.source, edge.target) for edge in report.import_edges} == {
+        ("main.py", "src.py"),
+        ("main.py", "src/pkg/core.py"),
+    }
 
 
 def test_pep621_poetry_groups_and_scripts():
@@ -195,3 +213,36 @@ def test_setup_py_dependency_limitation_is_visible():
     )
     report = analyze(snap, Limits())
     assert any("依赖声明未提取" in w for w in report.warnings)
+
+
+def test_mermaid_escapes_paths_and_keeps_all_json_edges():
+    report = analyze(Snapshot(name="demo", source="local"), Limits())
+    assert "```mermaid" not in markdown(report)
+    path = 'x["]#&<svg>%\n```click\\\u2028.py'
+    report.import_edges = [
+        Edge(source=path, target="模块.py", line=1),
+        Edge(source=path, target="模块.py", line=3),
+    ]
+    rendered = markdown(report)
+    graph = rendered.split("```mermaid\n")[1].split("\n```")[0]
+    assert graph.count(" --> ") == 1
+    assert "x#91;#34;#93;#35;#38;#60;svg#62;#37; #96;#96;#96;click#92; .py" in graph
+    assert '["模块.py"]' in graph
+    assert len(Report.model_validate_json(report.model_dump_json()).import_edges) == 2
+
+
+@pytest.mark.parametrize(
+    ("sources", "targets", "nodes", "connections"), [(1, 70, 40, 39), (8, 17, 22, 80)]
+)
+def test_mermaid_size_limits(sources, targets, nodes, connections):
+    report = analyze(Snapshot(name="demo", source="local"), Limits())
+    report.import_edges = [
+        Edge(source=f"{a:03}.py", target=f"{b + 50:03}.py", line=1)
+        for a in range(sources)
+        for b in range(targets)
+    ]
+    graph = markdown(report).split("```mermaid\n")[1].split("\n```")[0]
+    assert len(re.findall(r'^\s+m\d+\["', graph, re.M)) == nodes
+    assert graph.count(" --> ") == connections
+    assert len(report.import_edges) == sources * targets
+    assert "全部导入边见 JSON" in markdown(report)
