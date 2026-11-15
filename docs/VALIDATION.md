@@ -1,6 +1,6 @@
 # v0.2.0 验证记录
 
-日期：2026-11-15。
+验证日期为 2026-11-15。
 
 ## 本地验证
 
@@ -12,12 +12,13 @@
 | 覆盖率（启用分支覆盖） | 93%（终端显示的总覆盖率） |
 | Ruff 静态检查及格式检查 | 通过 |
 | sdist + wheel 构建 | 通过 |
+| 新虚拟环境安装 wheel 并运行离线示例 | 通过，确认版本为 0.2.0，Markdown 含 Mermaid 图 |
 
 Windows 本地环境缺少创建符号链接的权限，因此跳过对应本地测试。远端符号链接过滤另有模拟测试。新增测试覆盖缓存命中和绕过、Git 内容哈希和损坏、容量淘汰、并发事务、ETag 304、限流、预算及报告图和统计。
 
 ## GitHub Actions
 
-[RepoLens CI 工作流](https://github.com/Away409/RepoLens/actions/workflows/ci.yml)在 Ubuntu / Windows 分别运行 Python 3.11、3.12、3.13，每项执行安装、离线测试与覆盖率、Ruff 检查、格式检查及构建。每个提交的实际结果见对应 PR 的 Checks 页和工作流运行记录。
+[RepoLens CI 工作流](https://github.com/Away409/RepoLens/actions/workflows/ci.yml)在 Ubuntu / Windows 分别运行 Python 3.11、3.12、3.13，每项执行安装、离线测试与覆盖率、Ruff 检查、格式检查及构建。[首次分支验证运行](https://github.com/Away409/RepoLens/actions/runs/43712956656)的六项均通过，包含三项 GitHub 托管的 Windows 作业。最新提交另见 [PR #1 Checks](https://github.com/Away409/RepoLens/pull/1/checks)。
 
 工作流固定到官方发布的 [actions/checkout v7.0.1](https://github.com/actions/checkout/releases/tag/v7.0.1) 和 [actions/setup-python v7.0.0](https://github.com/actions/setup-python/releases/tag/v7.0.0) 的完整提交 SHA。
 
