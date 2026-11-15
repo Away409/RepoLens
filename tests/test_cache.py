@@ -1,7 +1,7 @@
 import base64
 import hashlib
 import sqlite3
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import closing
 from threading import Barrier
 
@@ -346,15 +346,44 @@ def test_concurrent_writes_and_reads_only_observe_whole_values(tmp_path):
         for _ in range(12):
             cache.put("shared", payload)
             result = cache.get("shared", 4_096)
-            assert result is not None and result[0] in data
-        barrier.wait(timeout=10)
-        cache.put(str(payload[0]), payload)
+            # A busy SQLite database is a valid best-effort cache miss.
+            # Any successful read must still contain a complete value.
+            if result is not None:
+                assert result[0] in data and result[1] is None
 
     with ThreadPoolExecutor(max_workers=len(data)) as pool:
-        list(pool.map(write, data))
+        # Collect worker errors before starting eviction. A second barrier
+        # can mask the original error or time out on a slower CI runner.
+        for future in as_completed([pool.submit(write, payload) for payload in data]):
+            future.result()
+        result = cache.get("shared", 4_096)
+        assert result is not None and result[0] in data
+        futures = [pool.submit(cache.put, str(payload[0]), payload) for payload in data]
+        for future in as_completed(futures):
+            future.result()
     with closing(sqlite3.connect(cache.path)) as db:
         count, size = db.execute("SELECT count(*), sum(length(data)) FROM entries").fetchone()
-    assert count == 3 and size == 3 * 4_096
+    # Contended writes may be skipped, but capacity must never be exceeded.
+    assert 1 <= count <= 3 and size == count * 4_096
+    cache.put("after-contention", data[0])
+    assert cache.get("after-contention", 4_096) == (data[0], None)
+
+
+def test_locked_cache_is_best_effort_and_recovers(tmp_path):
+    cache = DiskCache(tmp_path)
+    cache.put("existing", DATA)
+    with closing(sqlite3.connect(cache.path)) as db:
+        db.execute("BEGIN EXCLUSIVE")
+        try:
+            assert cache.get("existing", len(DATA)) is None
+            cache.put("blocked", DATA)
+            cache.discard("existing")
+        finally:
+            db.rollback()
+    assert cache.get("existing", len(DATA)) == (DATA, None)
+    assert cache.get("blocked", len(DATA)) is None
+    cache.put("recovered", DATA)
+    assert cache.get("recovered", len(DATA)) == (DATA, None)
 
 
 def test_unreadable_cache_is_best_effort(tmp_path):
