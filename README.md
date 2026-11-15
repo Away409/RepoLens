@@ -147,6 +147,7 @@ python -m pytest --cov=repolens --cov-report=term-missing
 python -m ruff check .
 python -m ruff format --check .
 python -m build
+python tools/verify_wheel.py
 ```
 
 测试使用临时目录和 HTTP 模拟响应，无需 GitHub Token 或联网；默认不会对真实仓库发请求。CI 配置覆盖 Ubuntu / Windows 的 Python 3.11、3.12、3.13。是否实际跑过以及本次结果见 [docs/VALIDATION.md](docs/VALIDATION.md)。

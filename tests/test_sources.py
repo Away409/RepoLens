@@ -68,7 +68,13 @@ def remote_handler(request):
                     {"path": "main.py", "type": "blob", "mode": "100644", "size": 12, "sha": BLOB},
                     {"path": "secret.py", "type": "blob", "mode": "120000", "sha": BLOB},
                     {"path": "sub", "type": "commit", "mode": "160000", "sha": BLOB},
-                    {"path": "../escape.py", "type": "blob", "mode": "100644", "sha": BLOB},
+                    {
+                        "path": "../escape.py",
+                        "type": "blob",
+                        "mode": "100644",
+                        "sha": BLOB,
+                        "size": 12,
+                    },
                 ],
             },
         )

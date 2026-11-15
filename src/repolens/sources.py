@@ -254,6 +254,48 @@ def public_metadata(data: dict) -> bool:
     )
 
 
+def valid_tree(data: dict, sha: str) -> bool:
+    """Validate before persisting or reusing a tree, including cached JSON."""
+    if (
+        data.get("sha", sha) != sha
+        or type(data.get("truncated")) is not bool
+        or not isinstance(data.get("tree"), list)
+    ):
+        return False
+    paths = set()
+    for entry in data["tree"]:
+        if not isinstance(entry, dict):
+            return False
+        path = entry.get("path")
+        if not isinstance(path, str) or path in paths:
+            return False
+        paths.add(path)
+        if entry.get("type") not in ("blob", "tree", "commit"):
+            return False
+        if not isinstance(entry.get("mode"), str):
+            return False
+        if entry["type"] == "blob" and entry["mode"] in {"100644", "100755"}:
+            size, blob_sha = entry.get("size"), entry.get("sha")
+            if type(size) is not int or size < 0:
+                return False
+            if not isinstance(blob_sha, str) or not GIT_SHA.fullmatch(blob_sha):
+                return False
+    return True
+
+
+def response_cacheable(response: httpx.Response) -> bool:
+    # Request representation headers are fixed. Unknown Vary fields require a
+    # different cache key, so bypass persistence until those fields are supported.
+    vary = {field.strip().lower() for field in response.headers.get("vary", "").split(",")}
+    return "no-store" not in response.headers.get("cache-control", "").lower() and vary <= {
+        "",
+        "accept",
+        "accept-encoding",
+        "x-github-api-version",
+        "x-requested-with",
+    }
+
+
 @dataclass
 class GitHubResponse:
     data: dict
@@ -281,6 +323,8 @@ class GitHubSource:
         )
         headers = {
             "Accept": "application/vnd.github+json",
+            "Accept-Encoding": "identity",
+            "X-Requested-With": "RepoLens",
             "User-Agent": f"RepoLens/{__version__}",
             "X-GitHub-Api-Version": "2022-11-28",
         }
@@ -366,7 +410,7 @@ class GitHubSource:
                         self.rate_limit_reached = self.stats.rate_limited = True
                         raise RepoLensError("GitHub API 限流；稍后重试，或设置 GITHUB_TOKEN。")
                     etag = response.headers.get("etag", "")
-                    store = "no-store" not in response.headers.get("cache-control", "").lower()
+                    store = response_cacheable(response)
                     if status == 304:
                         if validator is None:
                             raise RepoLensError("GitHub 返回 304，但没有可用的缓存数据。")
@@ -388,6 +432,8 @@ class GitHubSource:
                         raise RepoLensError("仓库可能已迁移；请使用 GitHub 显示的最新地址。")
                     if status >= 400:
                         raise RepoLensError(errors.get(status, f"GitHub API 返回 HTTP {status}。"))
+                    if status != 200:
+                        raise RepoLensError(f"GitHub API 返回非预期 HTTP {status}。")
                     raw = bounded_body(response, max_bytes)
                     data = json.loads(raw)
                     if not isinstance(data, dict):
@@ -464,27 +510,24 @@ class GitHubSource:
                 tree = self._conditional_get(
                     tree_path,
                     f"{scope}:tree:{tree_path}",
-                    lambda data: (
-                        data.get("sha") == tree_sha
-                        and data.get("truncated") is False
-                        and isinstance(data.get("tree"), list)
-                    ),
+                    lambda data: valid_tree(data, tree_sha) and data.get("truncated") is False,
                 )
             else:
                 tree = self.get(tree_path)
-            if "sha" in tree and tree["sha"] != tree_sha:
-                raise ValueError("unexpected tree SHA")
+            if not valid_tree(tree, tree_sha):
+                raise ValueError("invalid tree")
+            license_info = meta.get("license")
+            if license_info is not None and not isinstance(license_info, dict):
+                raise ValueError("invalid license")
             snapshot = Snapshot(
                 name=f"{owner}/{repo}",
                 source="github",
                 url=f"https://github.com/{owner}/{repo}",
                 revision=sha,
                 description=meta.get("description") or "",
-                license=(meta.get("license") or {}).get("spdx_id"),
+                license=(license_info or {}).get("spdx_id"),
             )
             entries = tree["tree"]
-            if not isinstance(entries, list) or type(tree.get("truncated")) is not bool:
-                raise ValueError("invalid tree")
             if tree.get("truncated") or len(entries) > self.limits.max_entries:
                 snapshot.inventory_complete = False
                 snapshot.warnings.append("远端目录树被截断或超过条目上限；不能据此判定文件不存在。")

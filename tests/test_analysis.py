@@ -3,9 +3,26 @@ import re
 
 import pytest
 
-from repolens.analyzer import analyze, import_edges, parse_manifest, python_module
+from repolens.analyzer import analyze, import_edges, module_name, parse_manifest, python_module
 from repolens.models import Edge, FileEntry, Limits, Report, Snapshot
 from repolens.render import markdown
+
+
+def test_root_src_module_and_src_layout_resolve_without_crashing():
+    paths = ["src.py", "main.py", "src/pkg/core.py"]
+    assert module_name("src.py") == "src"
+    assert module_name("src/pkg/core.py") == "pkg.core"
+    snapshot = Snapshot(
+        name="demo",
+        source="local",
+        entries=[FileEntry(path=p) for p in paths],
+        contents={"main.py": "import src\nfrom pkg import core\n", "src.py": "pass\n"},
+    )
+    report = analyze(snapshot, Limits())
+    assert {(edge.source, edge.target) for edge in report.import_edges} == {
+        ("main.py", "src.py"),
+        ("main.py", "src/pkg/core.py"),
+    }
 
 
 def test_pep621_poetry_groups_and_scripts():

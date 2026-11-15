@@ -270,7 +270,7 @@ def python_module(path: str, text: str) -> tuple[PythonModule, list[Evidence]]:
 
 def module_name(path: str) -> str:
     parts = list(PurePosixPath(path).with_suffix("").parts)
-    if parts[0] == "src":
+    if len(parts) > 1 and parts[0] == "src":
         parts.pop(0)
     if parts[-1] == "__init__":
         parts.pop()

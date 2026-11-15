@@ -34,3 +34,5 @@ jobs:
         run: python -m ruff format --check .
       - name: Build sdist and wheel
         run: python -m build
+      - name: Install wheel and exercise CLI
+        run: python tools/verify_wheel.py
