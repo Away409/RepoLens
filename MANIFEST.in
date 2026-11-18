@@ -1,6 +1,7 @@
 include LICENSE README.md CONTRIBUTING.md CHANGELOG.md
 recursive-include docs *.md
 recursive-include examples *.md *.json *.py *.toml
+recursive-include examples/cpp_demo *.cpp *.hpp
 recursive-include tests *.py
 include tools/verify_wheel.py
 include .github/workflows/ci.yml
