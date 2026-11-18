@@ -19,6 +19,7 @@ import pathspec
 
 from . import __version__
 from .cache import GIT_SHA, DiskCache, default_cache_dir, matches_blob
+from .cpp import CPP_SOURCE_SUFFIXES, CPP_SUFFIXES
 from .models import FileEntry, Limits, RemoteReads, Snapshot
 
 log = logging.getLogger(__name__)
@@ -92,12 +93,14 @@ def candidate(path: str) -> bool:
         name in MANIFESTS
         or (name.startswith("requirements") and name.endswith(".txt"))
         or path.endswith(".py")
+        or PurePosixPath(name).suffix in CPP_SUFFIXES
         or name.startswith("readme")
     )
 
 
 def priority(entry: FileEntry) -> tuple[int, int, str]:
     name = PurePosixPath(entry.path).name.lower()
+    stem, _, suffix = name.rpartition(".")
     is_example = any(
         p in {"tests", "test", "examples", "docs"} for p in PurePosixPath(entry.path).parts
     )
@@ -107,7 +110,9 @@ def priority(entry: FileEntry) -> tuple[int, int, str]:
         rank = 0
     elif name.startswith("readme") and "/" not in entry.path:
         rank = 1
-    elif name in {"__main__.py", "cli.py", "main.py", "app.py"}:
+    elif name in {"__main__.py", "cli.py", "main.py", "app.py"} or (
+        stem == "main" and f".{suffix}" in CPP_SOURCE_SUFFIXES
+    ):
         rank = 2
     elif name.startswith("readme"):
         rank = 4
