@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+
+- 本地和远端仓库支持 C++ 静态语法分析，提取常见类型与函数定义、`#include` 和全局 `main` 入口线索。
+- JSON schema 1.2 新增 `cpp_files`，Markdown 添加 C++ 源码证据和仓库内头文件候选链接。
+- C++ 源文件与头文件纳入既有读取预算。安装后的 wheel 验证覆盖 Python 和 C++ 的 JSON 与 Markdown 输出。
+
 ## 0.2.0 — 2026-11-15
 
 - 补强异常目录树、缓存正文和 HTTP Vary 校验，拒绝非预期成功状态；修复根目录 src.py 的模块解析。
