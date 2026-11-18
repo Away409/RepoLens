@@ -1,6 +1,7 @@
 """Versioned report contract, shared by sources, analysis and renderers."""
 
 from datetime import UTC, datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -86,6 +87,20 @@ class PythonModule(BaseModel):
     calls: list[CallSite] = Field(default_factory=list)
 
 
+class CppInclude(BaseModel):
+    name: str
+    kind: Literal["quoted", "angled", "macro"]
+    line: int
+    target: str | None = None
+
+
+class CppFile(BaseModel):
+    path: str
+    has_parse_errors: bool = False
+    symbols: list[Symbol] = Field(default_factory=list)
+    includes: list[CppInclude] = Field(default_factory=list)
+
+
 class Edge(BaseModel):
     source: str
     target: str
@@ -118,4 +133,5 @@ class Report(BaseModel):
     entry_points: list[Evidence] = Field(default_factory=list)
     modules: list[PythonModule] = Field(default_factory=list)
     import_edges: list[Edge] = Field(default_factory=list)
+    cpp_files: list[CppFile] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
