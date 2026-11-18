@@ -4,7 +4,7 @@
 
 RepoLens 是面向学习者和开发者的只读命令行工具：输入公开 GitHub 地址或本地目录，生成中文 Markdown 分析报告，也可导出结构化 JSON。不需要大模型 API、不克隆或执行被分析项目、不安装其依赖。
 
-> v0.2.0 支持公开仓库增量读取、报告读取统计和 Mermaid 模块导入图。请按下方步骤从源码安装。
+> v0.3.0 新增 C++ 源码和头文件分析。中文 Markdown 和 JSON 都包含符号、`#include` 和 `main` 入口线索及源码行号。
 
 ## 能做什么
 
@@ -16,6 +16,7 @@ RepoLens 是面向学习者和开发者的只读命令行工具：输入公开 G
 | 依赖解析 | PEP 621 / Poetry / dependency-groups、requirements、setup.cfg、package.json |
 | CMake 线索 | 正则提取 find_package / add_executable，明确标为推断 |
 | Python AST | 类、函数、方法、异步函数、静态导入、入口守卫、调用表达式行号 |
+| C++ 语法树 | 命名空间、类、结构体、联合体、枚举、函数定义，`#include` 和全局 `main` 候选入口 |
 | 源码追溯 | 远端报告附固定提交和行号链接 |
 | 输出 | 中文 Markdown、带 `schema_version` 的 JSON |
 | 资源控制 | 文件数、单文件大小、总字节、目录条目、API 请求预算与超时 |
@@ -80,6 +81,9 @@ repolens analyze . --local --max-files 100 -o self-report.md
 # 5. 覆盖已有报告（必须显式指定）
 repolens analyze ./examples/demo_repo --local -o demo.md --force
 
+# 6. 分析 C++ 项目，导出符号和头文件引用
+repolens analyze ./examples/cpp_demo --local --format json -o cpp-report.json
+
 # 查看全部参数
 repolens analyze --help
 ```
@@ -127,7 +131,7 @@ Windows 默认目录为 `%LOCALAPPDATA%\RepoLens\Cache`，macOS / Linux 默认�
 | `--max-requests` | 50 | 含重试的 API 请求预算 |
 | `--timeout` | 20 | 单次网络操作超时秒数，不是任务总时限 |
 
-优先读取配置、README、常见入口，再读取一般 Python 文件，最后读取测试与示例。只下载需要的 blob，优先级相同按目录深度和路径排序。
+优先读取配置、README 和常见入口文件（含 `main.cpp` 等），再读取一般 Python 和 C++ 文件，最后读取测试与示例。只下载需要的 blob，优先级相同按目录深度和路径排序。
 
 远端至少需要元数据、提交和目录树请求。目录树截断、文件过大、语法错误、内容阶段断网或限流均在报告中注明；**“未发现”仅针对已扫描范围**。元数据阶段失败返回退出码 1；有效但有告警的部分报告返回 0；参数错误返回 2。自动化调用需同时检查 JSON 的 `inventory_complete`、`eligible_files`、`analyzed_files` 和 `warnings`。
 
@@ -139,6 +143,14 @@ JSON schema 1.1 新增 `content_complete` 和 `remote_reads`，原有字段保�
 - `request_budget_exhausted` / `rate_limited` 表示请求预算或限流实际阻止了读取。`bytes_read` 同时计入缓存和网络的内容字节。
 
 有导入边时，Markdown 图展示最多 40 个模块、80 对模块关系，重复导入合并为一条图边；JSON 的 `import_edges` 保留全部已提取边和行号。
+
+### C++ 源码分析
+
+扫描 `.cpp`、`.cc`、`.cxx`、`.c++`、`.hpp`、`.hh`、`.hxx`、`.h++` 和 `.h`，扩展名匹配忽略大小写。`.h` 用同一套 C++ 语法解析。涉及宏、条件编译或语法错误的文件可能只有部分结果，报告会给出告警。`main` 和 CMake 可执行目标都只是入口线索。
+
+JSON schema 1.2 新增 `cpp_files`。每个文件包含 `path`、`has_parse_errors`、`symbols` 和 `includes`。旧字段继续可用，`modules` 和 `import_edges` 仍用于 Python。
+
+`includes[].kind` 区分引号（`quoted`）、尖括号（`angled`）和宏表达式（`macro`）。引号引用先匹配源文件所在目录，再检查仓库根目录、`include/` 和 `src/`。尖括号只检查这三个候选目录。缺失或歧义时 `target` 为 `null`。匹配仅使用文件清单，不额外读取头文件。条件分支中的指令都算作语法线索，宏展开、实际编译参数和编译器搜索路径留待构建时确定。
 
 ## 验证与开发
 
@@ -152,13 +164,13 @@ python tools/verify_wheel.py
 
 测试使用临时目录和 HTTP 模拟响应，无需 GitHub Token 或联网；默认不会对真实仓库发请求。CI 配置覆盖 Ubuntu / Windows 的 Python 3.11、3.12、3.13。是否实际跑过以及本次结果见 [docs/VALIDATION.md](docs/VALIDATION.md)。
 
-核心结构：`sources.py` 获取快照；`analyzer.py` 提取证据；`models.py` 定义 JSON 契约；`render.py` 生成报告；`cli.py` 处理参数和输出。
+核心结构：`sources.py` 获取快照；`analyzer.py` 提取证据；`cpp.py` 提取 C++ 语法证据；`models.py` 定义 JSON 契约；`render.py` 生成报告；`cli.py` 处理参数和输出。
 
 详细设计见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，发布步骤见 [docs/GITHUB_GUIDE.md](docs/GITHUB_GUIDE.md)，学习及项目经历整理见 [docs/LEARNING.md](docs/LEARNING.md)。
 
 ## 边界
 
-- Python 深度分析；C++、Java、TypeScript 等暂不做 AST、完整调用图或业务语义总结。
+- Python 和 C++ 支持静态语法分析。Java、TypeScript 等暂提供扩展名统计和已有的配置线索。
 - import 关系仅静态匹配常见根目录和 `src/` 布局；不解释动态导入、`sys.path` 修改和复杂 monorepo 包映射。
 - 不读取所有文件；不展开依赖锁文件、递归 requirements 引用或远端依赖 URL；`setup.py` 仅分析符号，不提取其中的依赖声明。
 - 本地只读取根 `.gitignore`，不调用 Git；忽略规则并不等价于完整 Git 工作树语义。
@@ -171,7 +183,8 @@ python tools/verify_wheel.py
 - [x] GitHub + 本地目录，中文 Markdown + JSON
 - [x] 预算控制、失败处理、源码证据、离线测试
 - [x] 固定 blob SHA 缓存、ETag 验证和模块导入图
-- [ ] 扩展 C++ / TypeScript 解析器
+- [x] C++ 语法解析、符号、头文件引用和入口线索
+- [ ] TypeScript 解析器
 - [ ] 可选 LLM 解释层，要求引用静态证据并显示费用预算
 
 MIT License。欢迎通过 Issue 和 Pull Request 提出问题；不要提交包含真实密钥的测试样本。
