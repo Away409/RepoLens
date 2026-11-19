@@ -3,14 +3,18 @@
 import logging
 import os
 import tempfile
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Annotated
 
+import httpx
 import typer
+from pydantic import ValidationError
 
 from . import __version__
 from .analyzer import analyze
-from .models import Limits
+from .explain import evidence_list, generate, preview
+from .models import Limits, Report
 from .render import markdown
 from .sources import GitHubSource, RepoLensError, local_snapshot
 
@@ -50,6 +54,53 @@ def write_report(path: Path, content: str, force: bool) -> None:
         raise RepoLensError("输出文件已存在；未覆盖。") from None
     finally:
         temporary.unlink(missing_ok=True)
+
+
+@app.command("explain")
+def explain_command(
+    report_path: Annotated[Path, typer.Argument(help="analyze 导出的 JSON 报告")],
+    budget_usd: Annotated[
+        str | None, typer.Option(help="单次生成预算（美元）。省略时离线预览证据")
+    ] = None,
+    output: Annotated[Path | None, typer.Option("--output", "-o", help="输出 Markdown")] = None,
+    force: Annotated[bool, typer.Option(help="允许覆盖已有输出文件")] = False,
+):
+    """预览证据，或按预算向 OpenAI 请求带源码行号的阅读建议。"""
+    try:
+        if output and output.exists():
+            if output.samefile(report_path):
+                raise RepoLensError("请选择与输入报告不同的输出路径。")
+            if not force:
+                raise RepoLensError("输出文件已存在；换一个路径或添加 --force。")
+        report = Report.model_validate_json(report_path.read_bytes())
+        items = evidence_list(report)
+        if budget_usd is None:
+            content = preview(items)
+        else:
+            try:
+                budget = Decimal(budget_usd)
+            except InvalidOperation:
+                raise RepoLensError("请用十进制金额指定 --budget-usd。") from None
+            if not budget.is_finite() or budget <= 0:
+                raise RepoLensError("生成预算必须是大于零的有限美元金额。")
+            key = os.environ.get("OPENAI_API_KEY", "").strip()
+            if not key or not key.isascii() or not key.isprintable():
+                raise RepoLensError("请设置有效的 OPENAI_API_KEY，或省略预算进行离线预览。")
+            with httpx.Client(headers={"Authorization": "Bearer " + key}, timeout=60) as client:
+                content = generate(items, budget, client)
+        if output:
+            write_report(output, content, force)
+            typer.echo(f"已保存：{output}", err=True)
+        else:
+            typer.echo(content, nl=False)
+    except (OSError, ValidationError, RepoLensError) as error:
+        message = (
+            str(error)
+            if isinstance(error, RepoLensError)
+            else "无法读取报告或写入文件，请检查 JSON 格式及路径权限。"
+        )
+        typer.echo(f"错误：{message}", err=True)
+        raise typer.Exit(code=1) from None
 
 
 @app.command("analyze")

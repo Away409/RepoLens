@@ -4,7 +4,7 @@
 
 RepoLens 是面向学习者和开发者的只读命令行工具：输入公开 GitHub 地址或本地目录，生成中文 Markdown 分析报告，也可导出结构化 JSON。不需要大模型 API、不克隆或执行被分析项目、不安装其依赖。
 
-> v0.4.0 支持 TypeScript 和 TSX。报告可定位组件、类型声明、静态导入和再导出的源码行。
+> v0.5.0 增加可选的 AI 阅读建议。先离线查看将发送的证据，再决定是否指定美元预算生成带源码行号的解释。
 
 ## 能做什么
 
@@ -161,6 +161,25 @@ JSON schema 1.2 新增 `cpp_files`。每个文件包含 `path`、`has_parse_erro
 
 `references` 记录静态 ES 导入及带来源的再导出，包含原始模块名、起始行与候选目标。相对引用按清单匹配显式路径、同名 TypeScript 文件及目录下的 index 文件，也识别常见的 .js、.mjs、.cjs 输出扩展名。缺失或有多个候选时目标留空。该匹配不读取额外文件，也不加载 tsconfig、包导出映射、动态 import 或 require。
 
+## 从静态报告生成阅读建议
+
+先导出 JSON，再运行离线预览。预览与常规分析都无需 OpenAI 密钥。
+
+```powershell
+repolens analyze ./examples/ts_demo --local --format json -o ts-report.json
+repolens explain ts-report.json
+```
+
+如需生成建议，请在环境变量 `OPENAI_API_KEY` 中配置自己的密钥，然后指定单次美元预算，例如：
+
+```powershell
+repolens explain ts-report.json --budget-usd 0.01 -o reading-notes.md
+```
+
+该命令向 OpenAI 发送预览列出的文件路径、行号和静态证据摘要。最多选择 32 项，每个文件最多选 3 个符号。生成前先请求精确的输入 token 数，以标准输入费率和 800 个输出 token 计算预计费用上限。超过预算时停止生成。响应超时、拒绝或格式错误后不会自动重试；已发出的生成请求可能产生费用。报告中的用量估算按未缓存标准价格计算，实际结算以账户账单为准。[计数接口](https://developers.openai.com/api/docs/guides/token-counting) · [模型与费率](https://developers.openai.com/api/docs/models/gpt-5.4-mini)
+
+每条建议附上已核验存在的证据位置。引用检查只核对位置，阅读时仍需结合源码判断模型解释。静态 JSON 格式继续使用 schema 1.3。
+
 ## 验证与开发
 
 ```bash
@@ -194,7 +213,7 @@ python tools/verify_wheel.py
 - [x] 固定 blob SHA 缓存、ETag 验证和模块导入图
 - [x] C++ 语法解析、符号、头文件引用和入口线索
 - [x] TypeScript 和 TSX 解析器
-- [ ] 可选 LLM 解释层，要求引用静态证据并显示费用预算
+- [x] 可选 LLM 解释层，要求引用静态证据并显示费用预算
 
 MIT License。欢迎通过 Issue 和 Pull Request 提出问题；不要提交包含真实密钥的测试样本。
 

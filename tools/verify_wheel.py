@@ -57,6 +57,10 @@ def main() -> None:
             assert "## C++ 源文件与头文件" in text and "demo::Greeter::message" in text
             target = str(repository / "examples" / "ts_demo")
             raw = run("-m", "repolens", "analyze", target, "--local", "--format", "json")
+            report_path = root / "typescript.json"
+            report_path.write_text(raw, encoding="utf-8")
+            preview = run("-m", "repolens", "explain", str(report_path))
+            assert "GreetingView.tsx:3" in preview and "预览费用为 0" in preview
             view, greeting = json.loads(raw)["typescript_files"]
             assert not view["has_parse_errors"] and not greeting["has_parse_errors"]
             assert view["references"][0]["target"] == greeting["path"] == "greeting.ts"

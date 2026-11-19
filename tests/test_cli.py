@@ -12,7 +12,7 @@ runner = CliRunner()
 
 
 def test_version_and_help():
-    assert "0.4.0" in runner.invoke(app, ["version"]).stdout
+    assert "0.5.0" in runner.invoke(app, ["version"]).stdout
     assert runner.invoke(app, ["analyze", "--help"]).exit_code == 0
 
 
