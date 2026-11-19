@@ -4,7 +4,7 @@
 
 RepoLens 是面向学习者和开发者的只读命令行工具：输入公开 GitHub 地址或本地目录，生成中文 Markdown 分析报告，也可导出结构化 JSON。不需要大模型 API、不克隆或执行被分析项目、不安装其依赖。
 
-> v0.3.0 新增 C++ 源码和头文件分析。中文 Markdown 和 JSON 都包含符号、`#include` 和 `main` 入口线索及源码行号。
+> v0.4.0 支持 TypeScript 和 TSX。报告可定位组件、类型声明、静态导入和再导出的源码行。
 
 ## 能做什么
 
@@ -17,6 +17,7 @@ RepoLens 是面向学习者和开发者的只读命令行工具：输入公开 G
 | CMake 线索 | 正则提取 find_package / add_executable，明确标为推断 |
 | Python AST | 类、函数、方法、异步函数、静态导入、入口守卫、调用表达式行号 |
 | C++ 语法树 | 命名空间、类、结构体、联合体、枚举、函数定义，`#include` 和全局 `main` 候选入口 |
+| TypeScript 语法树 | 顶层命名声明、类和接口方法、静态导入和再导出及仓库内相对路径匹配 |
 | 源码追溯 | 远端报告附固定提交和行号链接 |
 | 输出 | 中文 Markdown、带 `schema_version` 的 JSON |
 | 资源控制 | 文件数、单文件大小、总字节、目录条目、API 请求预算与超时 |
@@ -131,7 +132,7 @@ Windows 默认目录为 `%LOCALAPPDATA%\RepoLens\Cache`，macOS / Linux 默认�
 | `--max-requests` | 50 | 含重试的 API 请求预算 |
 | `--timeout` | 20 | 单次网络操作超时秒数，不是任务总时限 |
 
-优先读取配置、README 和常见入口文件（含 `main.cpp` 等），再读取一般 Python 和 C++ 文件，最后读取测试与示例。只下载需要的 blob，优先级相同按目录深度和路径排序。
+优先读取配置、README 和常见入口文件（含 `main.cpp` 等），再读取一般 Python、C++ 和 TypeScript 文件，最后读取测试与示例。只下载需要的 blob，优先级相同按目录深度和路径排序。
 
 远端至少需要元数据、提交和目录树请求。目录树截断、文件过大、语法错误、内容阶段断网或限流均在报告中注明；**“未发现”仅针对已扫描范围**。元数据阶段失败返回退出码 1；有效但有告警的部分报告返回 0；参数错误返回 2。自动化调用需同时检查 JSON 的 `inventory_complete`、`eligible_files`、`analyzed_files` 和 `warnings`。
 
@@ -152,6 +153,14 @@ JSON schema 1.2 新增 `cpp_files`。每个文件包含 `path`、`has_parse_erro
 
 `includes[].kind` 区分引号（`quoted`）、尖括号（`angled`）和宏表达式（`macro`）。引号引用先匹配源文件所在目录，再检查仓库根目录、`include/` 和 `src/`。尖括号只检查这三个候选目录。缺失或歧义时 `target` 为 `null`。匹配仅使用文件清单，不额外读取头文件。条件分支中的指令都算作语法线索，宏展开、实际编译参数和编译器搜索路径留待构建时确定。
 
+### TypeScript 源码分析
+
+运行 `repolens analyze ./examples/ts_demo --local` 查看示例，加上 `--format json` 可查看 schema 1.3 新增的 `typescript_files`。历史报告缺少该字段时按空列表读取。
+
+支持 `.ts`、`.tsx`、`.mts`、`.cts`（含声明文件）。每个文件记录顶层命名函数、绑定到变量的箭头函数或函数表达式、类、接口、类型别名、枚举及类或接口的命名方法，并标明起止行。解析受损的文件保留可识别的声明并给出告警。
+
+`references` 记录静态 ES 导入及带来源的再导出，包含原始模块名、起始行与候选目标。相对引用按清单匹配显式路径、同名 TypeScript 文件及目录下的 index 文件，也识别常见的 .js、.mjs、.cjs 输出扩展名。缺失或有多个候选时目标留空。该匹配不读取额外文件，也不加载 tsconfig、包导出映射、动态 import 或 require。
+
 ## 验证与开发
 
 ```bash
@@ -170,7 +179,7 @@ python tools/verify_wheel.py
 
 ## 边界
 
-- Python 和 C++ 支持静态语法分析。Java、TypeScript 等暂提供扩展名统计和已有的配置线索。
+- Python、C++ 和 TypeScript 支持静态语法分析。Java 等暂提供扩展名统计和已有的配置线索。
 - import 关系仅静态匹配常见根目录和 `src/` 布局；不解释动态导入、`sys.path` 修改和复杂 monorepo 包映射。
 - 不读取所有文件；不展开依赖锁文件、递归 requirements 引用或远端依赖 URL；`setup.py` 仅分析符号，不提取其中的依赖声明。
 - 本地只读取根 `.gitignore`，不调用 Git；忽略规则并不等价于完整 Git 工作树语义。
@@ -184,7 +193,7 @@ python tools/verify_wheel.py
 - [x] 预算控制、失败处理、源码证据、离线测试
 - [x] 固定 blob SHA 缓存、ETag 验证和模块导入图
 - [x] C++ 语法解析、符号、头文件引用和入口线索
-- [ ] TypeScript 解析器
+- [x] TypeScript 和 TSX 解析器
 - [ ] 可选 LLM 解释层，要求引用静态证据并显示费用预算
 
 MIT License。欢迎通过 Issue 和 Pull Request 提出问题；不要提交包含真实密钥的测试样本。

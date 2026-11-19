@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0
+
+- 在本地和 GitHub 的既有读取预算内分析 TypeScript 和 TSX，提取顶层声明、命名方法和静态模块引用。
+- JSON schema 1.3 增加 `typescript_files`。Markdown 展示源码行及唯一匹配的仓库内模块路径。
+
 ## 0.3.0
 
 - 本地和远端仓库支持 C++ 静态语法分析，提取常见类型与函数定义、`#include` 和全局 `main` 入口线索。
