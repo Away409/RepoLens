@@ -1,8 +1,20 @@
-# v0.2.0 验证记录
+# 验证记录
+
+## v0.3.0
+
+2026-11-18 在 Linux / Python 3.12 验证。134 项测试全部通过，启用分支覆盖后的总覆盖率为 94%。Ruff 静态检查和格式检查、sdist 与 wheel 构建通过。新虚拟环境安装 wheel 后分别用 Python 和 C++ 示例核对 Markdown 和 JSON 输出。
+
+真实 GitHub REST API 使用匿名请求分析 `fmtlib/fmt` 的 `11.1.4` 标签，解析为提交 `123913715afeb8a437e6388b4473fcc4753e1c9a`。在 18 个读取文件中有 13 个 C++ 文件，提取了 1,438 条符号和 133 条 `#include`，其中 26 条匹配到仓库内路径。12 个 C++ 文件带有语法树未完整识别的提示，反映了宏较多的项目只能提取部分证据。
+
+```bash
+repolens analyze fmtlib/fmt --ref 11.1.4 --no-cache --max-files 18 --format json -o fmt-report.json
+```
+
+## v0.2.0
 
 验证日期为 2026-11-15。
 
-## 本地验证
+### 本地验证
 
 环境为 Windows / Python 3.13.7。测试通过临时目录和 `httpx.MockTransport` 运行。
 
@@ -18,13 +30,13 @@ Windows 本地环境缺少创建符号链接的权限，因此跳过对应本地
 
 本轮新增 33 项回归检查，涵盖异常目录树、重复路径、无效大小和 SHA、语义损坏的缓存正文、HTTP Vary、非预期状态码、重试预算、缓存命中时的文件与字节预算，以及根目录 src.py 的导入关系。
 
-## GitHub Actions
+### GitHub Actions
 
 [RepoLens CI 工作流](https://github.com/Away409/RepoLens/actions/workflows/ci.yml)在 Ubuntu / Windows 分别运行 Python 3.11、3.12、3.13，每项执行安装、离线测试与覆盖率、Ruff 检查、格式检查、构建，以及新虚拟环境安装 wheel 后的 JSON / Markdown CLI 验证。[首次分支验证运行](https://github.com/Away409/RepoLens/actions/runs/43712956656)的六项均通过，包含三项 GitHub 托管的 Windows 作业。最新提交另见 [PR #1 Checks](https://github.com/Away409/RepoLens/pull/1/checks)。
 
 工作流固定到官方发布的 [actions/checkout v7.0.1](https://github.com/actions/checkout/releases/tag/v7.0.1) 和 [actions/setup-python v7.0.0](https://github.com/actions/setup-python/releases/tag/v7.0.0) 的完整提交 SHA。
 
-## 真实 GitHub REST API 冒烟测试
+### 真实 GitHub REST API 冒烟测试
 
 使用 v0.2.0 CLI 匿名访问公开仓库 `Away409/RepoLens` 的固定提交 `b627c0515eddd20a8df1cdf12e613098d40fa905`。使用空的专用缓存目录，连续分析两次。两次文件清单均完整（28 个文件），均根据文件预算读取了 17 个候选文本中的 5 个，共 14,453 字节。
 

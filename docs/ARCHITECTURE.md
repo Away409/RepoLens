@@ -13,7 +13,7 @@ flowchart TD
   B --> D[本地目录和忽略规则]
   C --> E[Snapshot 文件清单和文本]
   D --> E
-  E --> F[配置解析与 Python AST]
+  E --> F[配置与源码语法解析]
   F --> G[Report 结构化证据]
   G --> H[Markdown 报告]
   G --> I[JSON 数据]
@@ -27,6 +27,7 @@ flowchart TD
 | `models.py` | 快照、证据、报告契约 | Pydantic 验证；JSON 包含 `schema_version` |
 | `sources.py` | 安全边界和资源预算 | 本地不运行 Git；远端只 GET 固定 GitHub API |
 | `analyzer.py` | 提取依赖、入口、符号和导入边 | 配置解析与 AST 不执行目标代码 |
+| `cpp.py` | C++ 语法证据 | Tree-sitter 提取定义及指令，只在已有清单中匹配 include 路径 |
 | `render.py` | 用户可读报告 | 文本转义；源码链接固定提交；展示上限 |
 
 ## 关键决策
@@ -50,6 +51,12 @@ flowchart TD
 `PythonVisitor` 使用作用域栈生成 `Class.method.inner` 等限定名；记录节点的起止行。AST 看到的是代码语法：即使 import 在函数、条件分支或 `TYPE_CHECKING` 中，也会被记录。
 
 导入边只匹配清单内可唯一映射的模块名称：去掉 `.py`，识别根 `src/` 和包 `__init__.py`，计算相对 import 的包路径。冲突的模块名称不会猜测。`obj.method()` 仅记录调用表达式，不猜测 `obj` 的运行时类型。
+
+## C++ 语法证据
+
+Tree-sitter 按文件解析源码，提取带起止行号的类型和函数定义。词法作用域决定限定名，类外定义使用源码中的限定名。长限定名保留末尾 511 字符并标记省略。语法树包含错误时，报告保留可识别的线索并提示范围。全局 `main` 入口要求定义及其外层语法节点明确。
+
+`cpp_files[].includes` 记录指令行号、书写形式和可选的清单匹配。匹配以仓库内相对路径为输入，无额外磁盘或网络读取。由于没有展开条件编译或宏，匹配结果只作为阅读线索。
 
 ## 错误策略
 

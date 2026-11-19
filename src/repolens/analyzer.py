@@ -8,6 +8,7 @@ import tomllib
 from collections import Counter
 from pathlib import PurePosixPath
 
+from .cpp import CPP_SUFFIXES, cpp_file
 from .models import (
     CallSite,
     Dependency,
@@ -24,10 +25,7 @@ from .models import (
 LANGUAGES = {
     ".py": "Python",
     ".pyi": "Python",
-    ".cpp": "C++",
-    ".cc": "C++",
-    ".cxx": "C++",
-    ".hpp": "C++",
+    **dict.fromkeys(CPP_SUFFIXES, "C++"),
     ".h": "C/C++ header",
     ".c": "C",
     ".js": "JavaScript",
@@ -305,7 +303,7 @@ def import_edges(modules: list[PythonModule], paths: list[str]) -> list[Edge]:
 def analyze(snapshot: Snapshot, limits: Limits) -> Report:
     paths = sorted(entry.path for entry in snapshot.entries)
     report = Report(
-        schema_version="1.1",
+        schema_version="1.2",
         name=snapshot.name,
         source=snapshot.source,
         url=snapshot.url,
@@ -343,6 +341,7 @@ def analyze(snapshot: Snapshot, limits: Limits) -> Report:
             line=1,
             detail="\n".join(snapshot.contents[path].splitlines()[:16])[:1200],
         )
+    inventory = set(paths)
     for path, content in sorted(snapshot.contents.items()):
         try:
             if path.endswith(".py"):
@@ -355,6 +354,12 @@ def analyze(snapshot: Snapshot, limits: Limits) -> Report:
                     )
                 if len(module.calls) == 200:
                     report.warnings.append(f"{path}：调用表达式最多展示前 200 个。")
+            elif PurePosixPath(path).suffix.lower() in CPP_SUFFIXES:
+                cpp, entries = cpp_file(path, content, inventory)
+                report.cpp_files.append(cpp)
+                report.entry_points.extend(entries)
+                if cpp.has_parse_errors:
+                    report.warnings.append(f"{path}：C++ 语法树未完整识别，保留可识别的线索。")
             else:
                 deps, entries, warnings = parse_manifest(path, content)
                 report.dependencies.extend(deps)

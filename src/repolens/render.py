@@ -62,7 +62,7 @@ def markdown(report: Report) -> str:
     out = [
         f"# RepoLens · {clean(report.name)}",
         "",
-        "> 基于文件清单、配置和 Python AST 的静态分析；不执行目标代码，不调用大模型。",
+        "> 根据文件清单、配置、Python AST 和 C++ 语法树生成的静态分析报告。",
         "",
         "## 项目概览",
         "",
@@ -77,7 +77,7 @@ def markdown(report: Report) -> str:
         "| 指标 | 结果 |",
         "| --- | --- |",
         f"| 纳入清单的文件 | {report.file_count} |",
-        f"| 内容候选（Python / 支持的配置 / README） | {report.eligible_files} |",
+        f"| 内容候选（Python / C++ / 支持的配置 / README） | {report.eligible_files} |",
         f"| 实际读取文本 | {len(report.analyzed_files)} |",
         f"| 读取字节 | {report.bytes_read} |",
         f"| API 请求次数（含重试） | {report.requests} |",
@@ -171,6 +171,37 @@ def markdown(report: Report) -> str:
         out.append("")
     if not report.modules:
         out.append("本次未成功解析 Python 模块。\n")
+    if report.cpp_files:
+        out += [
+            "## C++ 源文件与头文件",
+            "",
+            "头文件路径按清单推断。条件分支中的指令也会计入，宏和编译器搜索路径未展开。",
+            "",
+        ]
+        for cpp in report.cpp_files[:40]:
+            out += [f"### {clean(cpp.path)}", "", f"源码：{source(report, cpp.path)}", ""]
+            for symbol in cpp.symbols[:20]:
+                out.append(
+                    f"- {clean(symbol.kind)} **{clean(symbol.name)}** — "
+                    f"{source(report, cpp.path, symbol.line)}"
+                )
+            for include in cpp.includes[:20]:
+                name = {
+                    "quoted": f'"{include.name}"',
+                    "angled": f"<{include.name}>",
+                    "macro": include.name,
+                }[include.kind]
+                target = f" → {source(report, include.target)}" if include.target else ""
+                out.append(
+                    f"- `#include` {clean(name)} — {source(report, cpp.path, include.line)}{target}"
+                )
+            if not cpp.symbols and not cpp.includes:
+                out.append("- 未识别到支持的定义或头文件引用。")
+            if len(cpp.symbols) > 20 or len(cpp.includes) > 20:
+                out.append("- 更多符号和头文件引用见 JSON。")
+            out.append("")
+        if len(report.cpp_files) > 40:
+            out += ["更多 C++ 文件见 JSON。", ""]
     out += [
         "## 模块导入关系",
         "",
@@ -193,12 +224,12 @@ def markdown(report: Report) -> str:
         "",
         "1. 阅读 README，明确项目用途和运行前提。",
         "2. 阅读依赖清单和已识别的入口声明。",
-        "3. 从入口所在模块沿导入关系阅读实现，再结合测试核对行为。",
+        "3. 从入口所在文件沿模块导入或头文件引用阅读实现，再结合测试核对行为。",
         "4. 亲自运行可信项目的测试；本报告没有执行目标仓库代码。",
         "",
         "## 限制与告警",
         "",
-        "- 当前版本深入解析 Python；其他语言主要提供文件统计、配置和工程结构线索。",
+        "- Python 和 C++ 支持语法分析；其他语言提供文件统计、配置和工程结构线索。",
         "- 根 .gitignore 仅在本地模式生效；嵌套 .gitignore 不解析。",
         "- 固定排除依赖、构建产物、符号链接、子模块和常见密钥文件；不构成全面敏感信息扫描。",
         "- Markdown 为阅读摘要，部分列表有展示上限；完整已提取结果和预算见 JSON。",
