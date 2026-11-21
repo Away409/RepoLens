@@ -21,6 +21,7 @@ from . import __version__
 from .cache import GIT_SHA, DiskCache, default_cache_dir, matches_blob
 from .cpp import CPP_SOURCE_SUFFIXES, CPP_SUFFIXES
 from .models import FileEntry, Limits, RemoteReads, Snapshot
+from .typescript import TS_SUFFIXES
 
 log = logging.getLogger(__name__)
 IGNORED = {
@@ -94,6 +95,7 @@ def candidate(path: str) -> bool:
         or (name.startswith("requirements") and name.endswith(".txt"))
         or path.endswith(".py")
         or PurePosixPath(name).suffix in CPP_SUFFIXES
+        or PurePosixPath(name).suffix in TS_SUFFIXES
         or name.startswith("readme")
     )
 

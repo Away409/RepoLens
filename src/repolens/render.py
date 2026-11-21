@@ -62,7 +62,7 @@ def markdown(report: Report) -> str:
     out = [
         f"# RepoLens · {clean(report.name)}",
         "",
-        "> 根据文件清单、配置、Python AST 和 C++ 语法树生成的静态分析报告。",
+        "> 根据文件清单、配置、Python AST、C++ 和 TypeScript 语法树生成的静态分析报告。",
         "",
         "## 项目概览",
         "",
@@ -77,7 +77,7 @@ def markdown(report: Report) -> str:
         "| 指标 | 结果 |",
         "| --- | --- |",
         f"| 纳入清单的文件 | {report.file_count} |",
-        f"| 内容候选（Python / C++ / 支持的配置 / README） | {report.eligible_files} |",
+        f"| 内容候选（Python / C++ / TypeScript / 配置 / README） | {report.eligible_files} |",
         f"| 实际读取文本 | {len(report.analyzed_files)} |",
         f"| 读取字节 | {report.bytes_read} |",
         f"| API 请求次数（含重试） | {report.requests} |",
@@ -171,6 +171,33 @@ def markdown(report: Report) -> str:
         out.append("")
     if not report.modules:
         out.append("本次未成功解析 Python 模块。\n")
+    if report.typescript_files:
+        out += [
+            "## TypeScript 源文件",
+            "",
+            "相对模块引用按文件清单匹配。包名和路径别名保留原文。",
+            "",
+        ]
+        for ts_file in report.typescript_files[:40]:
+            out += [f"### {source(report, ts_file.path)}", ""]
+            for symbol in ts_file.symbols[:20]:
+                out.append(
+                    f"- {clean(symbol.kind)} **{clean(symbol.name)}** — "
+                    f"{source(report, ts_file.path, symbol.line)}"
+                )
+            for ref in ts_file.references[:20]:
+                target = f" → {source(report, ref.target)}" if ref.target else ""
+                out.append(
+                    f"- {ref.kind} {clean(ref.specifier)} — "
+                    f"{source(report, ts_file.path, ref.line)}{target}"
+                )
+            if not ts_file.symbols and not ts_file.references:
+                out.append("- 未识别到支持的声明或模块引用。")
+            if len(ts_file.symbols) > 20 or len(ts_file.references) > 20:
+                out.append("- 更多声明和引用见 JSON。")
+            out.append("")
+        if len(report.typescript_files) > 40:
+            out += ["更多 TypeScript 文件见 JSON。", ""]
     if report.cpp_files:
         out += [
             "## C++ 源文件与头文件",
@@ -229,7 +256,7 @@ def markdown(report: Report) -> str:
         "",
         "## 限制与告警",
         "",
-        "- Python 和 C++ 支持语法分析；其他语言提供文件统计、配置和工程结构线索。",
+        "- Python、C++ 和 TypeScript 支持语法分析；其他语言提供文件统计、配置和工程结构线索。",
         "- 根 .gitignore 仅在本地模式生效；嵌套 .gitignore 不解析。",
         "- 固定排除依赖、构建产物、符号链接、子模块和常见密钥文件；不构成全面敏感信息扫描。",
         "- Markdown 为阅读摘要，部分列表有展示上限；完整已提取结果和预算见 JSON。",

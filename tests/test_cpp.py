@@ -157,7 +157,7 @@ def test_remote_cpp_report_links_to_fixed_revision_without_fetching_header():
     with GitHubSource(limits, transport=httpx.MockTransport(handler), use_cache=False) as client:
         report = analyze(client.snapshot("acme/demo"), limits)
     assert len(requests) == 4
-    assert report.schema_version == "1.2" and not report.modules and not report.import_edges
+    assert report.schema_version == "1.3" and not report.modules and not report.import_edges
     rendered = markdown(report)
     assert f"/blob/{sha}/src/main.cpp#L1" in rendered
     assert f"/blob/{sha}/src/main.cpp#L2" in rendered

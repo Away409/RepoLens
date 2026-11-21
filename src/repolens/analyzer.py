@@ -21,6 +21,7 @@ from .models import (
     Snapshot,
     Symbol,
 )
+from .typescript import TS_SUFFIXES, typescript_file
 
 LANGUAGES = {
     ".py": "Python",
@@ -30,8 +31,7 @@ LANGUAGES = {
     ".c": "C",
     ".js": "JavaScript",
     ".jsx": "JavaScript",
-    ".ts": "TypeScript",
-    ".tsx": "TypeScript",
+    **dict.fromkeys(TS_SUFFIXES, "TypeScript"),
     ".go": "Go",
     ".rs": "Rust",
     ".java": "Java",
@@ -303,7 +303,7 @@ def import_edges(modules: list[PythonModule], paths: list[str]) -> list[Edge]:
 def analyze(snapshot: Snapshot, limits: Limits) -> Report:
     paths = sorted(entry.path for entry in snapshot.entries)
     report = Report(
-        schema_version="1.2",
+        schema_version="1.3",
         name=snapshot.name,
         source=snapshot.source,
         url=snapshot.url,
@@ -354,6 +354,13 @@ def analyze(snapshot: Snapshot, limits: Limits) -> Report:
                     )
                 if len(module.calls) == 200:
                     report.warnings.append(f"{path}：调用表达式最多展示前 200 个。")
+            elif PurePosixPath(path).suffix.lower() in TS_SUFFIXES:
+                module_ts = typescript_file(path, content, inventory)
+                report.typescript_files.append(module_ts)
+                if module_ts.has_parse_errors:
+                    report.warnings.append(
+                        f"{path}：TypeScript 语法树未完整识别，保留可识别的线索。"
+                    )
             elif PurePosixPath(path).suffix.lower() in CPP_SUFFIXES:
                 cpp, entries = cpp_file(path, content, inventory)
                 report.cpp_files.append(cpp)

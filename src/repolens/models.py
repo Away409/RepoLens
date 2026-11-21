@@ -101,6 +101,20 @@ class CppFile(BaseModel):
     includes: list[CppInclude] = Field(default_factory=list)
 
 
+class TypeScriptReference(BaseModel):
+    kind: Literal["import", "re-export"]
+    specifier: str
+    line: int
+    target: str | None = None
+
+
+class TypeScriptFile(BaseModel):
+    path: str
+    has_parse_errors: bool = False
+    symbols: list[Symbol] = Field(default_factory=list)
+    references: list[TypeScriptReference] = Field(default_factory=list)
+
+
 class Edge(BaseModel):
     source: str
     target: str
@@ -133,5 +147,6 @@ class Report(BaseModel):
     entry_points: list[Evidence] = Field(default_factory=list)
     modules: list[PythonModule] = Field(default_factory=list)
     import_edges: list[Edge] = Field(default_factory=list)
+    typescript_files: list[TypeScriptFile] = Field(default_factory=list)
     cpp_files: list[CppFile] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)

@@ -48,13 +48,20 @@ def main() -> None:
             target = str(repository / "examples" / "cpp_demo")
             raw = run("-m", "repolens", "analyze", target, "--local", "--format", "json")
             report = json.loads(raw)
-            assert report["schema_version"] == "1.2" and report["content_complete"]
+            assert report["schema_version"] == "1.3" and report["content_complete"]
             header, main_file = report["cpp_files"]
             assert header["symbols"][-1]["name"] == "demo::Greeter::message"
             assert main_file["includes"][0]["target"] == "include/greeter.hpp"
             assert report["entry_points"][0]["line"] == 4
             text = run("-m", "repolens", "analyze", target, "--local")
             assert "## C++ 源文件与头文件" in text and "demo::Greeter::message" in text
+            target = str(repository / "examples" / "ts_demo")
+            raw = run("-m", "repolens", "analyze", target, "--local", "--format", "json")
+            view, greeting = json.loads(raw)["typescript_files"]
+            assert not view["has_parse_errors"] and not greeting["has_parse_errors"]
+            assert view["references"][0]["target"] == greeting["path"] == "greeting.ts"
+            text = run("-m", "repolens", "analyze", target, "--local")
+            assert "## TypeScript 源文件" in text and "GreetingView.tsx:3" in text
         except subprocess.CalledProcessError as error:
             print(error.stdout, file=sys.stderr)
             print(error.stderr, file=sys.stderr)
